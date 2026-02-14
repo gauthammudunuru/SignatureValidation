@@ -1,0 +1,9 @@
+openai
+pymupdf
+pillow
+torch
+torchvision
+numpy
+scikit-learn
+streamlit
+
