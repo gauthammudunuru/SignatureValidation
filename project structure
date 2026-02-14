@@ -1,0 +1,21 @@
+ai-signature-validator/
+│
+├── notebooks/
+│   └── signature_validator.ipynb
+│
+├── app/
+│   ├── app.py
+│   ├── pipeline.py
+│   ├── prompts.py
+│   ├── utils.py
+│
+├── models/
+│   └── stored_signatures/
+│       ├── client_A.png
+│       ├── client_B.png
+│
+├── sample_docs/
+│   └── sample_contract.pdf
+│
+├── requirements.txt
+└── README.md
