@@ -60,3 +60,22 @@ for i, (x,y,w,h) in enumerate(rect_contours):
     cropped = np.array(pages[0].crop((x,y,x+w,y+h)))
     text = reader.readtext(cropped, detail=0)
     print(f"Box {i+1} OCR Text:", text)
+
+###
+
+import pytesseract
+
+# Filter rectangles with any text
+text_boxes = []
+
+for i, (x, y, w, h) in enumerate(rect_contours):
+    cropped = pages[0].crop((x, y, x+w, y+h))
+    
+    # OCR the box
+    text = pytesseract.image_to_string(cropped)
+    
+    if len(text.strip()) > 0:
+        # This box contains text
+        text_boxes.append((x, y, w, h))
+        show_image(cropped, f"Text Box {len(text_boxes)}")
+
