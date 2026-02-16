@@ -116,7 +116,24 @@ for idx, img in enumerate(cropped_images):
         "edge_density": edge_density,
         "entropy": entropy
     }
-    
+
+
+### Entropy filtering
+
+TEXT_ENTROPY_THRESHOLD = 2.0   # based on your observation
+
+filtered_crops = []
+
+for idx, item in enumerate(crops_metrics):
+    img = item["image"]
+    entropy = item["metrics"]["entropy"]
+
+    if entropy < TEXT_ENTROPY_THRESHOLD:
+        filtered_crops.append(img)
+        print(f"KEEP crop {idx+1} | entropy={entropy:.3f}")
+    else:
+        print(f"SKIP crop {idx+1} | entropy={entropy:.3f}")
+
     crops_metrics.append({"image": img, "metrics": metrics})
     
     # Show image inline with metrics
