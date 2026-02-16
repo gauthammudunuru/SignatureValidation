@@ -99,3 +99,24 @@ show_images_grid(handwritten, "Handwritten Crops")
 show_images_grid(printed, "Printed Text Crops")
 show_images_grid(non_text, "Non-Text / Image Crops")
 
+
+
+
+
+max_dim = 1024
+
+def preprocess_for_llm(img):
+    w, h = img.size
+    scale = min(max_dim/w, max_dim/h, 1.0)
+    img_resized = img.resize((int(w*scale), int(h*scale)), Image.LANCZOS)
+    gray = cv2.cvtColor(np.array(img_resized), cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    edge_density = np.sum(edges)/(img_resized.width*img_resized.height)
+    return img_resized, edge_density
+
+# Filter crops with minimal info
+filtered_crops = []
+for img in cropped_images:
+    img_resized, density = preprocess_for_llm(img)
+    if density > 0.01:  # threshold can be tuned
+        filtered_crops.append(img_resized)
