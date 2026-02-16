@@ -1,26 +1,78 @@
 import base64
 from io import BytesIO
+import matplotlib.pyplot as plt
+from openai import OpenAI
+
+# Your OpenAI client
+client = OpenAI()
+
+# Assume cropped_images is a list of PIL Image objects from your rectangles
+classified_results = []
+
+handwritten = []
+printed = []
+non_text = []
+
+def show_image(img, title=""):
+    plt.figure(figsize=(6, 8))
+    plt.imshow(img)
+    plt.axis("off")
+    if title:
+        plt.title(title)
+    plt.show()
 
 for idx, img in enumerate(cropped_images):
-    buffered = BytesIO()
-    img.save(buffered, format="PNG")
-    img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+    try:
+        # Convert image to base64
+        buffered = BytesIO()
+        img.save(buffered, format="PNG")
+        img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        
+        # Build prompt
+        prompt = (
+            "You are a document image classifier. "
+            "The following is a PNG image encoded in base64. "
+            "Classify it into one of the following categories: "
+            "Printed text, Handwritten content, Non-text image. "
+            "Reply only with the category name.\n\n"
+            f"Image(base64): {img_b64}"
+        )
+        
+        # Call Qwen3-omni
+        response = client.chat.completion.create(
+            model="Qwen3-omni",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant for classifying document image crops."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        # Extract classification
+        classification = response.choices[0].message.content.strip()
+        print(f"Crop {idx+1}: {classification}")
+        
+        # Display the image inline for visual check
+        show_image(img, f"Crop {idx+1}: {classification}")
+        
+        # Store results
+        classified_results.append({
+            "index": idx,
+            "image": img,
+            "classification": classification
+        })
+        
+        # Separate into categories
+        cat = classification.lower()
+        if "handwritten" in cat:
+            handwritten.append(img)
+        elif "printed" in cat:
+            printed.append(img)
+        else:
+            non_text.append(img)
     
-    prompt = (
-        "You are a document image classifier. "
-        "The following is a PNG image encoded in base64. "
-        "Classify it into one of: Printed text, Handwritten content, Non-text image. "
-        "Reply only with the category name.\n\n"
-        f"Image(base64): {img_b64}"
-    )
-    
-    response = client.chat.completion.create(
-        model="Qwen3-omni",
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant for classifying document image crops."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    
-    classification = response.choices[0].message.content.strip()
-    print(f"Crop {idx+1}: {classification}")
+    except Exception as e:
+        print(f"Crop {idx+1} skipped due to error: {e}")
+        continue
+
+print(f"✅ Finished processing {len(classified_results)} crops successfully.")
+print(f"Handwritten: {len(handwritten)}, Printed: {len(printed)}, Non-text: {len(non_text)}")
