@@ -1,18 +1,34 @@
 pip install ultralytics
 
 from ultralytics import YOLO
-from PIL import Image
-import matplotlib.pyplot as plt
+import numpy as np
 
-model = YOLO("yolov8n.pt")  # tiny model, fast inference
+# Load YOLOv8 pretrained model (tiny, fast)
+model = YOLO("yolov8n.pt")  # can be replaced with a trained signature model later
 
-# image = PIL image
-results = model("page_1.png")  # returns bounding boxes
+# YOLO expects a file path or NumPy array, so convert PIL image to array
+page1_array = np.array(pages[0])
 
-# visualize
-results[0].plot()
-plt.imshow(results[0].plot())
-plt.show()
+# Run detection
+results = model(page1_array)
 
-# extract coordinates
-bboxes = results[0].boxes.xyxy.cpu().numpy()  # [[x1, y1, x2, y2], ...]
+# Visualize detection on the image
+result_img = results[0].plot()
+show_image(Image.fromarray(result_img), "Page 1 with Bounding Boxes")
+
+# Extract bounding boxes in [x1, y1, x2, y2] format
+bboxes = results[0].boxes.xyxy.cpu().numpy()  # numpy array of boxes
+print("Detected boxes:", bboxes)
+
+
+for i, box in enumerate(bboxes):
+    x1, y1, x2, y2 = map(int, box)
+    pad = 10  # optional margin
+    cropped = pages[0].crop((x1-pad, y1-pad, x2+pad, y2+pad))
+    
+    # Show cropped signature
+    show_image(cropped, f"Signature {i+1}")
+    
+    # Save cropped image
+    cropped.save(f"page1_signature_{i+1}.png")
+
