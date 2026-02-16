@@ -1,0 +1,57 @@
+from openai import OpenAI
+from PIL import Image
+import io
+
+# Your client
+client = OpenAI()
+
+# Assume you already have your cropped images in a list
+# Example: cropped_images = [crop1, crop2, ..., crop8]
+# Each element is a PIL Image
+
+classified_results = []
+
+for idx, img in enumerate(cropped_images):
+    # Convert PIL image to bytes for sending
+    img_byte_arr = io.BytesIO()
+    img.save(img_byte_arr, format='PNG')
+    img_bytes = img_byte_arr.getvalue()
+    
+    # Build prompt
+    prompt = (
+        "You are a document image classifier. "
+        "Classify this image crop into one of the following categories:\n"
+        "1. Printed text\n"
+        "2. Handwritten content\n"
+        "3. Non-text image (drawing, photo, etc.)\n"
+        "Reply only with the category name."
+    )
+    
+    # Call Qwen3-omni
+    response = client.chat.completion.create(
+        model="Qwen3-omni",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant for classifying document image crops."},
+            {
+                "role": "user",
+                "content": prompt,
+                "image": img_bytes  # attach the image
+            }
+        ]
+    )
+    
+    # Extract the classification from response
+    classification = response.choices[0].message.content.strip()
+    print(f"Crop {idx+1}: {classification}")
+    
+    # Store results
+    classified_results.append({
+        "index": idx,
+        "image": img,
+        "classification": classification
+    })
+
+# Now you can separate the images based on classification
+handwritten = [r["image"] for r in classified_results if r["classification"].lower().startswith("handwritten")]
+printed = [r["image"] for r in classified_results if r["classification"].lower().startswith("printed")]
+non_text = [r["image"] for r in classified_results if r["classification"].lower().startswith("non-text")]
