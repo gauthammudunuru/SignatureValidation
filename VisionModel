@@ -1,0 +1,18 @@
+pip install ultralytics
+
+from ultralytics import YOLO
+from PIL import Image
+import matplotlib.pyplot as plt
+
+model = YOLO("yolov8n.pt")  # tiny model, fast inference
+
+# image = PIL image
+results = model("page_1.png")  # returns bounding boxes
+
+# visualize
+results[0].plot()
+plt.imshow(results[0].plot())
+plt.show()
+
+# extract coordinates
+bboxes = results[0].boxes.xyxy.cpu().numpy()  # [[x1, y1, x2, y2], ...]
