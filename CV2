@@ -1,29 +1,50 @@
 import cv2
 import numpy as np
 from PIL import Image
+import matplotlib.pyplot as plt
 
-# Convert PIL image to OpenCV format
-img = np.array(pages[0])
-gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+def show_image(img, title=""):
+    plt.figure(figsize=(8,10))
+    plt.imshow(img)
+    plt.axis("off")
+    if title:
+        plt.title(title)
+    plt.show()
 
-# Threshold to binary
-_, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)  # invert: signature = white
+# Convert PIL page to OpenCV
+page_img = np.array(pages[0])
+img_cv = cv2.cvtColor(page_img, cv2.COLOR_RGB2BGR)
+gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+
+# Apply slight blur to reduce noise
+blur = cv2.GaussianBlur(gray, (5,5), 0)
+
+# Edge detection
+edges = cv2.Canny(blur, 50, 150)
 
 # Find contours
-contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-# Filter small noise
-signature_contours = [c for c in contours if cv2.contourArea(c) > 100]  # adjust threshold
+# Filter contours that are rectangular-ish
+rect_contours = []
+for c in contours:
+    approx = cv2.approxPolyDP(c, 0.02*cv2.arcLength(c, True), True)
+    if len(approx) == 4:  # rectangle has 4 corners
+        x, y, w, h = cv2.boundingRect(approx)
+        # optional: filter small boxes
+        if w*h > 1000:  
+            rect_contours.append((x,y,w,h))
 
-# Draw bounding boxes on a copy
-img_boxes = img.copy()
-for i, c in enumerate(signature_contours):
-    x, y, w, h = cv2.boundingRect(c)
-    cv2.rectangle(img_boxes, (x, y), (x+w, y+h), (255, 0, 0), 2)
-    
-    # Crop and show
+print(f"Detected {len(rect_contours)} rectangle(s)")
+
+# Draw rectangles for visualization
+img_boxes = img_cv.copy()
+for x, y, w, h in rect_contours:
+    cv2.rectangle(img_boxes, (x, y), (x+w, y+h), (0,0,255), 2)  # red boxes
+
+show_image(cv2.cvtColor(img_boxes, cv2.COLOR_BGR2RGB), "Detected Rectangles")
+
+for i, (x, y, w, h) in enumerate(rect_contours):
     cropped = pages[0].crop((x, y, x+w, y+h))
-    show_image(cropped, f"Signature {i+1}")
-
-# Show page with boxes
-show_image(Image.fromarray(img_boxes), "Detected Signatures")
+    show_image(cropped, f"Cropped Box {i+1}")
+    cropped.save(f"page1_box_{i+1}.png")
