@@ -95,3 +95,12 @@ for x, y, w, h in rect_contours:
     elif edge_density > 0.01:  # printed text threshold
         printed_boxes.append((x, y, w, h))
 
+for i, (x, y, w, h) in enumerate(handwritten_boxes):
+    cropped = pages[0].crop((x, y, x+w, y+h))
+    cropped.save(f"handwritten_{i+1}.png")
+    show_image(cropped, f"Handwritten {i+1}")
+
+for i, (x, y, w, h) in enumerate(printed_boxes):
+    cropped = pages[0].crop((x, y, x+w, y+h))
+    cropped.save(f"printed_{i+1}.png")
+    show_image(cropped, f"Printed {i+1}")
