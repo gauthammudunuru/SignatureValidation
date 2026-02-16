@@ -79,3 +79,19 @@ for i, (x, y, w, h) in enumerate(rect_contours):
         text_boxes.append((x, y, w, h))
         show_image(cropped, f"Text Box {len(text_boxes)}")
 
+############################
+
+handwritten_boxes = []
+printed_boxes = []
+
+for x, y, w, h in rect_contours:
+    cropped = pages[0].crop((x, y, x+w, y+h)).convert("L")
+    arr = np.array(cropped)
+    edges = cv2.Canny(arr, 50, 150)
+    edge_density = np.sum(edges)/(w*h)
+    
+    if edge_density > 0.05:  # handwritten threshold (adjust if needed)
+        handwritten_boxes.append((x, y, w, h))
+    elif edge_density > 0.01:  # printed text threshold
+        printed_boxes.append((x, y, w, h))
+
