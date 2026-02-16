@@ -76,3 +76,26 @@ for idx, img in enumerate(cropped_images):
 
 print(f"✅ Finished processing {len(classified_results)} crops successfully.")
 print(f"Handwritten: {len(handwritten)}, Printed: {len(printed)}, Non-text: {len(non_text)}")
+
+
+
+import matplotlib.pyplot as plt
+
+def show_images_grid(images, title="", cols=3):
+    if not images:
+        return
+    rows = (len(images) + cols - 1) // cols
+    plt.figure(figsize=(5*cols, 5*rows))
+    for i, img in enumerate(images):
+        plt.subplot(rows, cols, i+1)
+        plt.imshow(img)
+        plt.axis("off")
+    if title:
+        plt.suptitle(title, fontsize=16)
+    plt.show()
+
+# After classification loop
+show_images_grid(handwritten, "Handwritten Crops")
+show_images_grid(printed, "Printed Text Crops")
+show_images_grid(non_text, "Non-Text / Image Crops")
+
