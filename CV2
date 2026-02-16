@@ -48,3 +48,15 @@ for i, (x, y, w, h) in enumerate(rect_contours):
     cropped = pages[0].crop((x, y, x+w, y+h))
     show_image(cropped, f"Cropped Box {i+1}")
     cropped.save(f"page1_box_{i+1}.png")
+
+
+
+
+####
+
+import easyocr
+reader = easyocr.Reader(['en'])
+for i, (x,y,w,h) in enumerate(rect_contours):
+    cropped = np.array(pages[0].crop((x,y,x+w,y+h)))
+    text = reader.readtext(cropped, detail=0)
+    print(f"Box {i+1} OCR Text:", text)
