@@ -1,0 +1,241 @@
+import os
+import json
+import datetime
+from pathlib import Path
+
+import pdfplumber
+from pdf2image import convert_from_path
+import pytesseract
+from PIL import Image
+import spacy
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+import matplotlib.pyplot as plt
+import cv2
+import PyPDF2
+
+# =========================================
+# Component 1: PDF Input & Signature Detection
+# =========================================
+class PDFProcessor:
+    def __init__(self, pdf_path, output_dir="detected_signatures"):
+        self.pdf_path = pdf_path
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(exist_ok=True)
+        self.text_pages = []
+        self.image_pages = []
+        self.visible_signatures = []
+        self.digital_signatures = []
+
+    # Extract text from PDF
+    def parse_text(self):
+        with pdfplumber.open(self.pdf_path) as pdf:
+            self.text_pages = [page.extract_text() or "" for page in pdf.pages]
+        return self.text_pages
+
+    # Convert PDF pages to images
+    def convert_to_images(self):
+        self.image_pages = convert_from_path(self.pdf_path)
+        return self.image_pages
+
+    # OCR on page images
+    def ocr_images(self):
+        ocr_texts = []
+        for img in self.image_pages:
+            text = pytesseract.image_to_string(img)
+            ocr_texts.append(text)
+        return ocr_texts
+
+    # Detect visible signatures using OpenCV contour detection
+    def detect_visible_signatures(self):
+        sig_images = []
+        sig_count = 0
+        for page_idx, img in enumerate(self.image_pages):
+            cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+            _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            for cnt in contours:
+                x, y, w, h = cv2.boundingRect(cnt)
+                # Filter tiny contours
+                if w*h > 500:  
+                    sig_crop = img.crop((x, y, x+w, y+h))
+                    sig_count += 1
+                    sig_name = self.output_dir / f"page{page_idx+1}_sig{sig_count}.png"
+                    sig_crop.save(sig_name)
+                    sig_images.append(sig_crop)
+        self.visible_signatures = sig_images
+        return sig_images
+
+    # Extract invisible/digital PDF signatures
+    def extract_pdf_signatures(self):
+        digital_sigs = []
+        with open(self.pdf_path, "rb") as f:
+            reader = PyPDF2.PdfReader(f)
+            if reader.trailer["/Root"].get("/AcroForm"):
+                fields = reader.trailer["/Root"]["/AcroForm"].get("/Fields", [])
+                for fld in fields:
+                    fld_obj = fld.get_object()
+                    if fld_obj.get("/FT") == "/Sig":
+                        digital_sigs.append(fld_obj)
+        self.digital_signatures = digital_sigs
+        return digital_sigs
+
+# =========================================
+# Component 2: Client & User Identification
+# =========================================
+class ClientUserExtractor:
+    def __init__(self):
+        self.nlp = spacy.load("en_core_web_sm")
+
+    def extract_entities(self, texts):
+        clients = []
+        users = []
+        for text in texts:
+            doc = self.nlp(text)
+            for ent in doc.ents:
+                if ent.label_ == "ORG":
+                    clients.append(ent.text)
+                if ent.label_ == "PERSON":
+                    users.append(ent.text)
+        return list(set(clients)), list(set(users))
+
+# =========================================
+# Component 3: Authorization Forms Repository (Mock)
+# =========================================
+class AuthorizationRepo:
+    def __init__(self):
+        self.mock_db = {
+            "ACME Corp": ["AUTH-001.png", "AUTH-002.png"],
+            "Globex": ["AUTH-003.png"]
+        }
+
+    def get_forms(self, client_name):
+        return self.mock_db.get(client_name, [])
+
+# =========================================
+# Component 4: Signature Embedding & Matching
+# =========================================
+class SignatureMatcher:
+    def __init__(self):
+        pass
+
+    def embed_signature(self, img):
+        img_gray = img.convert("L").resize((100, 50))
+        vector = np.array(img_gray).flatten()
+        if np.linalg.norm(vector) > 0:
+            vector = vector / np.linalg.norm(vector)
+        return vector
+
+    def match_signature(self, sig_vector, repo_vectors):
+        if not repo_vectors:
+            return None, 0.0
+        similarities = [cosine_similarity([sig_vector], [v])[0][0] for v in repo_vectors]
+        best_idx = np.argmax(similarities)
+        return best_idx, similarities[best_idx]
+
+# =========================================
+# Component 5: KYC Fallback
+# =========================================
+class KYCFallback:
+    def __init__(self):
+        self.kyc_db = {
+            "ACME Corp": ["KYC-001.png", "KYC-002.png"],
+            "Globex": ["KYC-003.png"]
+        }
+
+    def get_kyc(self, client_name):
+        return self.kyc_db.get(client_name, [])
+
+# =========================================
+# Component 6: Result Output (Explainable)
+# =========================================
+class ResultOutput:
+    def __init__(self):
+        self.results = []
+
+    def record_result(self, client, user, matched_doc, score):
+        status = "VERIFIED" if score > 0.8 else "FAILED"
+        entry = {
+            "client": client,
+            "user": user,
+            "status": status,
+            "matchedDocument": matched_doc,
+            "timestamp": datetime.datetime.utcnow().isoformat() + "Z"
+        }
+        self.results.append(entry)
+        print(json.dumps(entry, indent=2))
+
+# =========================================
+# Component 7: UI + Storage
+# =========================================
+class StorageUI:
+    def __init__(self, results_obj):
+        self.results_obj = results_obj
+
+    def save_results(self, file_name="results.json"):
+        with open(file_name, "w") as f:
+            json.dump(self.results_obj.results, f, indent=2)
+        print(f"Results saved to {file_name}")
+
+    def show_signature_comparison(self, uploaded_sig, reference_sig):
+        fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+        axes[0].imshow(uploaded_sig)
+        axes[0].set_title("Uploaded PDF Signature")
+        axes[0].axis("off")
+        axes[1].imshow(reference_sig)
+        axes[1].set_title("Reference Signature")
+        axes[1].axis("off")
+        plt.show()
+
+# =========================================
+# Demo Execution
+# =========================================
+pdf_file = "/mnt/data/sample.pdf"  # Replace with actual PDF path
+
+# Step 1: PDF Processing
+processor = PDFProcessor(pdf_file)
+text_pages = processor.parse_text()
+images = processor.convert_to_images()
+ocr_texts = processor.ocr_images()
+visible_sigs = processor.detect_visible_signatures()
+digital_sigs = processor.extract_pdf_signatures()  # For invisible / certified signatures
+
+# Step 2: Client/User Extraction
+extractor = ClientUserExtractor()
+clients, users = extractor.extract_entities(text_pages + ocr_texts)
+print("Detected Clients:", clients)
+print("Detected Users:", users)
+
+# Step 3: Fetch Authorization Forms
+auth_repo = AuthorizationRepo()
+matcher = SignatureMatcher()
+kyc_fallback = KYCFallback()
+result_out = ResultOutput()
+ui = StorageUI(result_out)
+
+for client in clients:
+    auth_forms = auth_repo.get_forms(client)
+    kyc_forms = kyc_fallback.get_kyc(client)
+
+    # Embed repo forms as vectors (mocked with blank images for demo)
+    repo_vectors = [matcher.embed_signature(Image.new("RGB", (100, 50), color='black')) for f in auth_forms]
+
+    for user in users:
+        for sig_img in visible_sigs:
+            sig_vector = matcher.embed_signature(sig_img)
+            best_idx, score = matcher.match_signature(sig_vector, repo_vectors)
+            matched_doc = {"docId": auth_forms[best_idx], "type": "AuthorizationForm", "similarityScore": float(score)} if best_idx is not None else None
+
+            # Fallback to KYC if score < 0.8
+            if matched_doc is None or score < 0.8:
+                repo_vectors_kyc = [matcher.embed_signature(Image.new("RGB", (100, 50), color='black')) for f in kyc_forms]
+                best_idx, score = matcher.match_signature(sig_vector, repo_vectors_kyc)
+                matched_doc = {"docId": kyc_forms[best_idx], "type": "KYCDocument", "similarityScore": float(score)} if best_idx is not None else None
+
+            # Record result
+            result_out.record_result(client, user, matched_doc, score)
+
+# Step 8: Save results
+ui.save_results()
