@@ -1,17 +1,37 @@
-from openai import OpenAI
+from pdf2image import convert_from_path
+
+# Convert all pages to images
+pages = convert_from_path("document.pdf", dpi=300)
+
+# Optional: save images for inspection
+for i, page in enumerate(pages):
+    page.save(f"page_{i+1}.png")
 from PIL import Image
-import json
+import matplotlib.pyplot as plt
+
+def show_image(img, title=""):
+    plt.figure(figsize=(8, 10))
+    plt.imshow(img)
+    plt.axis("off")
+    if title:
+        plt.title(title)
+    plt.show()
+
+show_image(pages[0], "Page 1 Original")
 import base64
+from openai import OpenAI
+import json
 
 client = OpenAI()
 
+def encode_image(img: Image.Image):
+    import io
+    buffered = io.BytesIO()
+    img.save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode()
 
-def encode_image(image_path):
-    with open(image_path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
-
-
-image_base64 = encode_image("document.png")
+page_image = pages[0]
+image_base64 = encode_image(page_image)
 
 response = client.responses.create(
     model="gpt-4.1",
@@ -22,7 +42,7 @@ response = client.responses.create(
                 {
                     "type": "input_text",
                     "text": """
-Find handwritten signatures in this document image.
+Find handwritten signatures in this document page.
 
 Return ONLY valid JSON:
 
@@ -43,4 +63,6 @@ Return ONLY valid JSON:
 )
 
 result_text = response.output_text
-print(result_text)
+print("Raw AI Output:", result_text)
+bbox_data = json.loads(result_text)
+signatures = bbox_data["signatures"]
