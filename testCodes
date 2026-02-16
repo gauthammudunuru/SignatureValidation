@@ -66,3 +66,58 @@ result_text = response.output_text
 print("Raw AI Output:", result_text)
 bbox_data = json.loads(result_text)
 signatures = bbox_data["signatures"]
+
+
+
+#####Figuring out to filter noise images
+
+
+
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+from PIL import Image
+
+def show_image_with_metrics(img, metrics, title=""):
+    plt.figure(figsize=(6,6))
+    plt.imshow(img)
+    plt.axis("off")
+    metric_text = "\n".join([f"{k}: {v:.3f}" for k,v in metrics.items()])
+    if title:
+        plt.title(f"{title}\n{metric_text}", fontsize=10)
+    else:
+        plt.title(metric_text, fontsize=10)
+    plt.show()
+
+crops_metrics = []
+
+for idx, img in enumerate(cropped_images):
+    w, h = img.size
+    area = w*h
+    aspect_ratio = w/h
+    
+    # Convert to grayscale
+    gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
+    
+    # Edge density
+    edges = cv2.Canny(gray, 50, 150)
+    edge_density = np.sum(edges)/(w*h)
+    
+    # Entropy
+    hist = np.histogram(gray.flatten(), bins=256)[0]
+    hist = hist / hist.sum()
+    entropy = -np.sum(hist * np.log2(hist + 1e-8))
+    
+    metrics = {
+        "width": w,
+        "height": h,
+        "area": area,
+        "aspect_ratio": aspect_ratio,
+        "edge_density": edge_density,
+        "entropy": entropy
+    }
+    
+    crops_metrics.append({"image": img, "metrics": metrics})
+    
+    # Show image inline with metrics
+    show_image_with_metrics(img, metrics, title=f"Crop {idx+1}")
