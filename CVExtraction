@@ -1,5 +1,5 @@
 # ======================================================
-# FORENSIC FILTERING + SLIDING OCTANT WINDOW DETECTOR
+# HANDWRITTEN SIGNATURE EXTRACTION WITH STAGE VISUALIZATION
 # ======================================================
 
 import cv2
@@ -7,88 +7,78 @@ import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 
-
 # ------------------------------------------------------
-# 1️⃣ Advanced forensic filtering
+# 1️⃣ Forensic filtering mask
 # ------------------------------------------------------
-def forensic_signature_mask(pil_img):
-
+def forensic_signature_mask(pil_img, visualize=False):
     gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
 
+    # Basic binary inversion
     _, binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
 
-    # remove straight lines
-    horizontal_kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT, (40,1)
-    )
-    vertical_kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT, (1,40)
-    )
+    if visualize:
+        plt.figure(); plt.imshow(binary, cmap='gray'); plt.title("Binary inversion"); plt.axis("off"); plt.show()
 
-    binary = cv2.subtract(
-        binary,
-        cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel)
-    )
+    # Remove straight lines (horizontal + vertical)
+    hor_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40,1))
+    vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1,40))
 
-    binary = cv2.subtract(
-        binary,
-        cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel)
-    )
+    horizontal_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, hor_kernel)
+    vertical_lines   = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vert_kernel)
 
-    # remove bold text
-    binary = cv2.erode(binary, np.ones((2,2),np.uint8), iterations=1)
+    binary = cv2.subtract(binary, horizontal_lines)
+    binary = cv2.subtract(binary, vertical_lines)
 
-    # direction variation (signature-like flow)
+    if visualize:
+        plt.figure(); plt.imshow(binary, cmap='gray'); plt.title("After line removal"); plt.axis("off"); plt.show()
+
+    # Remove bold text (erosion)
+    binary = cv2.erode(binary, np.ones((2,2), np.uint8), iterations=1)
+
+    # Stroke variation filtering (signature-like curvy strokes)
     sobelx = cv2.Sobel(binary, cv2.CV_64F,1,0,ksize=3)
     sobely = cv2.Sobel(binary, cv2.CV_64F,0,1,ksize=3)
-
     angle = np.arctan2(sobely, sobelx)
     angle_std = cv2.GaussianBlur(np.abs(angle),(15,15),0)
-
     mask_variation = (angle_std > 0.5).astype(np.uint8)*255
-
     binary = cv2.bitwise_and(binary, mask_variation)
 
-    # connected components cleanup
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary,8)
+    if visualize:
+        plt.figure(); plt.imshow(binary, cmap='gray'); plt.title("After stroke variation filtering"); plt.axis("off"); plt.show()
 
+    # Connected components to remove tiny noise
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
     mask = np.zeros_like(binary)
-
-    for i in range(1,num_labels):
-
+    for i in range(1, num_labels):
         area = stats[i, cv2.CC_STAT_AREA]
-
         if area > 120:
             mask[labels==i] = 255
+
+    if visualize:
+        plt.figure(); plt.imshow(mask, cmap='gray'); plt.title("After connected components"); plt.axis("off"); plt.show()
 
     return mask
 
 
 # ------------------------------------------------------
-# 2️⃣ Sliding octant window search
+# 2️⃣ Sliding octant window, bottom-left focused
 # ------------------------------------------------------
-def sliding_octant_search(mask):
-
+def sliding_window_signature(mask, focus_weight=2.0):
     h, w = mask.shape
+    win_h, win_w = h//2, w//4
+    step_y, step_x = max(10, win_h//6), max(10, win_w//6)
 
-    # octant window size (~1/8 image)
-    win_h = h // 2
-    win_w = w // 4
-
-    best_score = -1
-    best_bbox = None
-
-    # stride = small step for smooth search
-    step_y = max(10, win_h // 6)
-    step_x = max(10, win_w // 6)
-
+    best_score, best_bbox = -1, None
     for y in range(0, h - win_h, step_y):
         for x in range(0, w - win_w, step_x):
-
             patch = mask[y:y+win_h, x:x+win_w]
-
-            # ink density score
             score = np.sum(patch > 0)
+
+            # Apply focus weighting: bottom-left has higher weight
+            weight = 1.0
+            if y > h//2 and x < w//2:
+                weight = focus_weight
+            score *= weight
 
             if score > best_score:
                 best_score = score
@@ -101,36 +91,32 @@ def sliding_octant_search(mask):
 # 3️⃣ Expand bbox slightly
 # ------------------------------------------------------
 def expand_bbox(bbox, shape, margin=20):
-
     x1,y1,x2,y2 = bbox
     h,w = shape
-
     x1 = max(0, x1-margin)
     y1 = max(0, y1-margin)
     x2 = min(w, x2+margin)
     y2 = min(h, y2+margin)
-
     return x1,y1,x2,y2
 
 
 # ------------------------------------------------------
-# 4️⃣ Final extractor
+# 4️⃣ Extract signature window from original image
 # ------------------------------------------------------
-def extract_signature_sliding(pil_img):
-
-    mask = forensic_signature_mask(pil_img)
+def extract_signature_window(pil_img, visualize=False):
+    mask = forensic_signature_mask(pil_img, visualize=visualize)
 
     if np.sum(mask)==0:
         return None
 
-    bbox = sliding_octant_search(mask)
-
+    bbox = sliding_window_signature(mask)
     bbox = expand_bbox(bbox, mask.shape)
-
     x1,y1,x2,y2 = bbox
 
-    # crop ORIGINAL image
     cropped = pil_img.crop((x1,y1,x2,y2))
+
+    if visualize:
+        plt.figure(figsize=(4,4)); plt.imshow(cropped); plt.axis("off"); plt.title("Final cropped signature window"); plt.show()
 
     return cropped
 
@@ -141,15 +127,12 @@ def extract_signature_sliding(pil_img):
 results = []
 
 for item in final_crops:
-
     if item["entropy"] < 2.0:
-
-        sig = extract_signature_sliding(item["image"])
-
+        sig_img = extract_signature_window(item["image"], visualize=True)
         results.append({
             "page": item["page"],
             "bbox": item["bbox"],
-            "signature": sig
+            "signature": sig_img
         })
 
 
@@ -157,19 +140,14 @@ for item in final_crops:
 # 6️⃣ Display
 # ------------------------------------------------------
 def display_results(results):
-
     for r in results:
-
         plt.figure(figsize=(4,4))
-
         if r["signature"] is not None:
             plt.imshow(r["signature"])
         else:
             plt.text(0.5,0.5,"No signature found",ha="center")
-
         plt.axis("off")
         plt.title(f"P{r['page']} | {r['bbox']}")
         plt.show()
-
 
 display_results(results)
