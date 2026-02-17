@@ -1,0 +1,129 @@
+You are given a PNG image in base64 format (variable `img_b64`). This image contains some printed text and handwritten or scribbled signature(s) on top.
+
+Your task:
+
+1. Detect only the **handwritten or scribbled signature portions** of the image. Ignore all printed text, labels, boxes, and whitespace. Only the hand-drawn strokes matter.
+
+2. Return the result as a **cropped PNG image in base64 format**, containing just the handwriting/signature. Preserve the strokes as black over a white background.
+
+3. Return ONLY JSON in this format:
+
+{
+  "handwritten_signature": "<base64 string of cropped signature image>"
+}
+
+Notes:
+- The cropped signature image should have minimal surrounding whitespace.
+- Do not return printed text or other elements.
+- Do not include explanations or any extra text. Only return valid JSON.
+
+
+
+import base64
+import io
+from PIL import Image
+import json
+from goldmansachs.openai import OpenAI
+import matplotlib.pyplot as plt
+
+client = OpenAI()
+
+# ===========================
+# Helper to decode base64 safely
+# ===========================
+def safe_b64decode(b64_string):
+    if not b64_string:
+        return b''
+    b64_string = b64_string.strip().replace("\n", "").replace("\r", "")
+    missing_padding = len(b64_string) % 4
+    if missing_padding:
+        b64_string += '=' * (4 - missing_padding)
+    try:
+        return base64.b64decode(b64_string)
+    except Exception as e:
+        print("Base64 decode failed:", e)
+        return b''
+
+def extract_handwritten_signature(image, max_size=1024):
+    """
+    Send a cropped image to LLM to extract handwritten signature only.
+    """
+    # 1️⃣ Downscale large images
+    img_copy = image.copy()
+    img_copy.thumbnail((max_size, max_size))
+
+    # 2️⃣ Convert to base64
+    buf = io.BytesIO()
+    img_copy.save(buf, format="PNG")
+    img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+    safe_b64 = json.dumps(img_b64)
+
+    # 3️⃣ LLM prompt
+    prompt = f"""
+You are given a PNG image in base64 format (variable `img_b64`).
+
+Base64: {safe_b64}
+
+Task: Detect only handwritten or scribbled signatures and return a cropped PNG image containing just the handwriting.
+
+Return ONLY JSON in this format:
+{{
+  "handwritten_signature": "<base64 string of cropped signature image>"
+}}
+"""
+    try:
+        response = client.chat.completion.create(
+            model="Qwen3-omni",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        content = response.choices[0].message.content.strip()
+        return json.loads(content).get("handwritten_signature", "")
+    except Exception as e:
+        print("LLM call failed:", e)
+        return ""
+
+# ===========================
+# Process all cropped images
+# ===========================
+handwritten_results = []
+
+for idx, item in enumerate(cropped_images):
+    img = item["image"]
+    signature_b64 = extract_handwritten_signature(img)
+    
+    handwritten_results.append({
+        "page": item["page"],
+        "bbox": item["bbox"],
+        "original_image": img,
+        "signature_b64": signature_b64
+    })
+
+# ===========================
+# Display extracted signatures
+# ===========================
+def display_handwritten_results(results):
+    for r in results:
+        plt.figure(figsize=(8,4))
+
+        # Left: original cropped image
+        plt.subplot(1,2,1)
+        plt.imshow(r["original_image"])
+        plt.axis("off")
+        plt.title(f"P{r['page']} | bbox={r['bbox']}", fontsize=10)
+
+        # Right: extracted signature
+        plt.subplot(1,2,2)
+        sig_img_bytes = safe_b64decode(r["signature_b64"])
+        if sig_img_bytes:
+            sig_img = Image.open(io.BytesIO(sig_img_bytes))
+            plt.imshow(sig_img)
+        else:
+            plt.imshow(r["original_image"])
+        plt.axis("off")
+        plt.title("Extracted signature", fontsize=10)
+
+        plt.tight_layout()
+        plt.show()
+
+# Display
+display_handwritten_results(handwritten_results)
