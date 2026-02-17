@@ -147,3 +147,24 @@ def display_llm_results_with_manual_check(results):
 
 # Display
 display_llm_results_with_manual_check(processed_results)
+
+
+
+def safe_b64decode(b64_string):
+    if not b64_string:
+        return b''
+    
+    # Remove whitespace/newlines
+    b64_string = b64_string.strip().replace("\n", "").replace("\r", "")
+    
+    # Add padding if missing
+    missing_padding = len(b64_string) % 4
+    if missing_padding:
+        b64_string += '=' * (4 - missing_padding)
+    
+    try:
+        return base64.b64decode(b64_string)
+    except Exception as e:
+        print("Base64 decode failed:", e)
+        return b''
+
