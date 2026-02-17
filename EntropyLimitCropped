@@ -103,24 +103,23 @@ def remove_background_for_filtering(pil_img):
 # ======================================================
 # 2b. Mild background reduction in original RGB
 # ======================================================
-def mild_background_reduction(pil_img):
-    """
-    Light background reduction in original RGB space.
-    Keeps printed text + signature intact.
-    """
+def mild_background_reduction_white_bg(pil_img):
     img_rgb = np.array(pil_img).astype(np.uint8)
-
-    # Convert to LAB to separate lightness channel
     lab = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2LAB)
     l, a, b = cv2.split(lab)
 
-    # Estimate background using large morphological opening
+    # Morphological opening to estimate background
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35,35))
     background = cv2.morphologyEx(l, cv2.MORPH_OPEN, kernel)
 
-    # Subtract background softly
-    l_reduced = cv2.subtract(l, background)
-    l_reduced = cv2.normalize(l_reduced, None, 0, 255, cv2.NORM_MINMAX)
+    # Subtract background to get foreground
+    fg = cv2.subtract(l, background)
+
+    # Invert fg so background becomes white
+    fg_inverted = cv2.bitwise_not(fg)
+
+    # Normalize to full range (0=black text, 255=white background)
+    l_reduced = cv2.normalize(fg_inverted, None, 0, 255, cv2.NORM_MINMAX)
 
     # Merge back channels
     lab_reduced = cv2.merge([l_reduced, a, b])
