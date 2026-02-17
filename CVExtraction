@@ -1,125 +1,122 @@
+# ======================================================
+# SIGNATURE EXTRACTION USING QUARTER DENSITY ANALYSIS
+# (All steps combined into ONE block)
+# ======================================================
+
 import cv2
 import numpy as np
 from PIL import Image
+import matplotlib.pyplot as plt
 
-def extract_signature_opencv(pil_img):
+
+# ------------------------------------------------------
+# 1️⃣ Convert image to binary (black strokes)
+# ------------------------------------------------------
+def to_binary(pil_img):
 
     gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
 
-    _, binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
-
-    # ==================================================
-    # 1️⃣ REMOVE STRAIGHT LINES
-    # ==================================================
-
-    horizontal_kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT, (40, 1)
-    )
-    horizontal_lines = cv2.morphologyEx(
-        binary, cv2.MORPH_OPEN, horizontal_kernel
+    _, binary = cv2.threshold(
+        gray, 180, 255, cv2.THRESH_BINARY_INV
     )
 
-    vertical_kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT, (1, 40)
-    )
-    vertical_lines = cv2.morphologyEx(
-        binary, cv2.MORPH_OPEN, vertical_kernel
-    )
-
-    binary = cv2.subtract(binary, horizontal_lines)
-    binary = cv2.subtract(binary, vertical_lines)
-
-    # ==================================================
-    # 2️⃣ REMOVE BOLD TEXT
-    # ==================================================
-
-    # erode thick strokes → bold text disappears faster
-    erosion_kernel = np.ones((2,2), np.uint8)
-    binary_thin = cv2.erode(binary, erosion_kernel, iterations=1)
-
-    # ==================================================
-    # 3️⃣ STROKE DIRECTION VARIANCE (MAGIC STEP)
-    # ==================================================
-
-    sobelx = cv2.Sobel(binary_thin, cv2.CV_64F, 1, 0, ksize=3)
-    sobely = cv2.Sobel(binary_thin, cv2.CV_64F, 0, 1, ksize=3)
-
-    angle = np.arctan2(sobely, sobelx)
-
-    # local angle variation
-    angle_std = cv2.GaussianBlur(
-        np.abs(angle), (15,15), 0
-    )
-
-    # signatures → high variation
-    mask_variation = (angle_std > 0.5).astype(np.uint8)*255
-
-    binary_filtered = cv2.bitwise_and(binary_thin, mask_variation)
-
-    # ==================================================
-    # 4️⃣ CONNECTED COMPONENTS
-    # ==================================================
-
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
-        binary_filtered, 8
-    )
-
-    mask = np.zeros_like(binary_filtered)
-
-    for i in range(1, num_labels):
-
-        x, y, w, h, area = stats[i]
-
-        # signature-like shapes
-        if area > 120:
-            mask[labels == i] = 255
-
-    if np.sum(mask) == 0:
-        return None
-
-    ys, xs = np.where(mask > 0)
-
-    x1, x2 = xs.min(), xs.max()
-    y1, y2 = ys.min(), ys.max()
-
-    cropped = mask[y1:y2, x1:x2]
-
-    cropped = cv2.bitwise_not(cropped)
-
-    return Image.fromarray(cropped)
+    return binary
 
 
-opencv_results = []
+# ------------------------------------------------------
+# 2️⃣ Find region (quarter) with highest ink density
+# ------------------------------------------------------
+def find_signature_region(binary):
+
+    h, w = binary.shape
+
+    regions = [
+        (0, h//2, 0, w//2),        # top-left
+        (0, h//2, w//2, w),        # top-right
+        (h//2, h, 0, w//2),        # bottom-left
+        (h//2, h, w//2, w)         # bottom-right
+    ]
+
+    scores = []
+
+    for r in regions:
+        y1, y2, x1, x2 = r
+        patch = binary[y1:y2, x1:x2]
+
+        # ink density score
+        score = np.sum(patch > 0)
+        scores.append(score)
+
+    best_idx = np.argmax(scores)
+
+    return regions[best_idx]
+
+
+# ------------------------------------------------------
+# 3️⃣ Expand bounding box slightly
+# ------------------------------------------------------
+def expand_bbox(region, shape, margin=30):
+
+    y1, y2, x1, x2 = region
+    h, w = shape
+
+    y1 = max(0, y1 - margin)
+    y2 = min(h, y2 + margin)
+    x1 = max(0, x1 - margin)
+    x2 = min(w, x2 + margin)
+
+    return y1, y2, x1, x2
+
+
+# ------------------------------------------------------
+# 4️⃣ Extract signature region from ORIGINAL image
+# ------------------------------------------------------
+def extract_signature_by_quarters(pil_img):
+
+    binary = to_binary(pil_img)
+
+    region = find_signature_region(binary)
+
+    y1, y2, x1, x2 = expand_bbox(region, binary.shape)
+
+    # crop from original image
+    cropped = pil_img.crop((x1, y1, x2, y2))
+
+    return cropped
+
+
+# ------------------------------------------------------
+# 5️⃣ Run extraction on final_crops
+# ------------------------------------------------------
+quarter_results = []
 
 for item in final_crops:
 
     if item["entropy"] < 2.0:
 
-        sig_img = extract_signature_opencv(item["image"])
+        sig_img = extract_signature_by_quarters(
+            item["image"]
+        )
 
-        opencv_results.append({
+        quarter_results.append({
             "page": item["page"],
             "bbox": item["bbox"],
             "signature": sig_img
         })
 
 
-import matplotlib.pyplot as plt
-
-def display_opencv_signatures(results):
+# ------------------------------------------------------
+# 6️⃣ Display extracted signatures
+# ------------------------------------------------------
+def display_results(results):
 
     for r in results:
 
         plt.figure(figsize=(4,4))
-
-        if r["signature"] is not None:
-            plt.imshow(r["signature"], cmap="gray")
-        else:
-            plt.text(0.5,0.5,"No signature found", ha="center")
-
+        plt.imshow(r["signature"])
         plt.axis("off")
-        plt.title(f"P{r['page']} | bbox={r['bbox']}")
+        plt.title(f"P{r['page']} | {r['bbox']}")
         plt.show()
 
-display_opencv_signatures(opencv_results)
 
+display_results(quarter_results)
