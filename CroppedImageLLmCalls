@@ -40,7 +40,7 @@ def extract_info_from_image(image, max_size=1024):
     img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
     # 3️⃣ Safely escape base64 for JSON
-    safe_b64 = json.dumps(img_b64)  # escape all control chars
+    safe_b64 = json.dumps(img_b64)  # ✅ no shadowing
 
     # 4️⃣ Build prompt
     prompt = f"""
@@ -68,25 +68,9 @@ Do not include explanations. Only return valid JSON.
             messages=[{"role": "user", "content": prompt}]
         )
 
-        content = response.choices[0].message.content
-
-        # Sometimes LLM outputs extra whitespace/newlines
-        content = content.strip()
-
+        content = response.choices[0].message.content.strip()
         return json.loads(content)
 
-    except Exception as e:
-        print("LLM call failed:", e)
-        return {"printed_name": "", "date": "", "signature_image": ""}
-
-    try:
-        response = client.chat.completion.create(
-            model="Qwen3-omni",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        import json
-        content = response.choices[0].message.content
-        return json.loads(content)
     except Exception as e:
         print("LLM call failed:", e)
         return {"printed_name": "", "date": "", "signature_image": ""}
