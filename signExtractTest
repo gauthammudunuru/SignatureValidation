@@ -1,103 +1,74 @@
 import base64
 import io
 from PIL import Image
-import numpy as np
-import cv2
 import matplotlib.pyplot as plt
 from goldmansachs.openai import OpenAI
-import json
 
 client = OpenAI()
 
-# ------------------------------
-# 1️⃣ Helper: convert to binary image
-# ------------------------------
-def to_binary_image(pil_img):
-    """
-    Convert image to black strokes on white background.
-    """
-    gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
-    # Adaptive thresholding
-    bin_img = cv2.adaptiveThreshold(
-        gray, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        25, 15
-    )
-    # Invert to make background white, strokes black
-    bin_img = cv2.bitwise_not(bin_img)
-    return Image.fromarray(bin_img)
-
-# ------------------------------
-# 2️⃣ LLM call for handwritten signature
-# ------------------------------
-def extract_handwritten_signature(bin_img, max_size=512):
-    """
-    Send binary image to LLM to extract handwritten signature only.
-    Returns base64 PNG of cropped signature.
-    """
-    img_copy = bin_img.copy()
-    img_copy.thumbnail((max_size, max_size))  # downscale to reduce context
-
+# ==============================
+# Convert PIL to data URL string
+# ==============================
+def pil_to_data_url(pil_img, max_size=512):
+    img_copy = pil_img.copy()
+    img_copy.thumbnail((max_size, max_size))  # downscale
     buf = io.BytesIO()
     img_copy.save(buf, format="PNG", optimize=True)
-    img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-    safe_b64 = json.dumps(img_b64)
+    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return f"data:image/png;base64,{b64}"
 
-    prompt = f"""
-You are given a black-and-white PNG image in base64 format (variable `img_b64`).
-Black pixels are handwritten or scribbled signature. White pixels are background.
-
-Task: Detect only the handwritten signature portions and return a cropped PNG image containing just the handwriting.
-
-Return ONLY JSON in this format:
-{{
-  "handwritten_signature": "<base64 string of cropped signature image>"
-}}
-Do not include explanations or extra text.
-"""
-
+# ==============================
+# LLM call for handwritten signature
+# ==============================
+def extract_handwritten_signature_structured(pil_img):
+    data_url = pil_to_data_url(pil_img)
+    
+    # Build structured message
+    messages = [
+        {"type": "text", "role": "user",
+         "content": "Extract only the handwritten signature portions. Return a cropped PNG image containing only the handwriting in base64. Return JSON only with {'handwritten_signature': '<base64>'}."},
+        {"type": "image", "role": "user", "image_url": data_url}
+    ]
+    
     try:
         response = client.chat.completion.create(
             model="Qwen3-omni",
-            messages=[{"role": "user", "content": prompt}]
+            messages=messages
         )
         content = response.choices[0].message.content.strip()
+        import json
         return json.loads(content).get("handwritten_signature", "")
     except Exception as e:
         print("LLM call failed:", e)
         return ""
 
-# ------------------------------
-# 3️⃣ Process all final_crops
-# ------------------------------
+# ==============================
+# Process final_crops (entropy < 2)
+# ==============================
 handwritten_results = []
-
 for item in final_crops:
-    if item["entropy"] < 2.0:  # only low-entropy crops
-        bin_img = to_binary_image(item["image"])
-        sig_b64 = extract_handwritten_signature(bin_img)
+    if item["entropy"] < 2.0:
+        # Convert to binary for better context
+        gray = item["image"].convert("L")
+        binary = gray.point(lambda x: 0 if x<128 else 255)
+        sig_b64 = extract_handwritten_signature_structured(binary)
         handwritten_results.append({
             "page": item["page"],
             "bbox": item["bbox"],
             "signature_b64": sig_b64
         })
 
-# ------------------------------
-# 4️⃣ Display extracted handwritten signatures
-# ------------------------------
-def display_extracted_signatures(results):
-    for r in results:
-        plt.figure(figsize=(4,4))
-        sig_b64 = r["signature_b64"]
-        if sig_b64:
-            sig_bytes = base64.b64decode(sig_b64)
-            sig_img = Image.open(io.BytesIO(sig_bytes))
-            plt.imshow(sig_img)
-        else:
-            plt.text(0.5,0.5,"No signature extracted", ha="center")
-        plt.axis("off")
-        plt.title(f"P{r['page']} | bbox={r['bbox']}")
-        plt.show()
-
-display_extracted_signatures(handwritten_results)
+# ==============================
+# Display extracted signatures
+# ==============================
+for r in handwritten_results:
+    plt.figure(figsize=(4,4))
+    sig_b64 = r["signature_b64"]
+    if sig_b64:
+        sig_img = Image.open(io.BytesIO(base64.b64decode(sig_b64)))
+        plt.imshow(sig_img)
+    else:
+        plt.text(0.5,0.5,"No signature extracted", ha="center")
+    plt.axis("off")
+    plt.title(f"P{r['page']} | bbox={r['bbox']}")
+    plt.show()
