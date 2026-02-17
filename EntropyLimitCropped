@@ -174,7 +174,7 @@ for page_idx, page in enumerate(pages):
             fg_img_rgb = fg_img.convert("RGB")
             new_entropy = calculate_entropy(fg_img_rgb)
 
-            if new_entropy < LOW_ENTROPY:
+            if new_entropy < LOW_ENTROPY+1:
                 # apply mild background reduction on original RGB image
                 mild_img = mild_background_reduction(crop)
                 final_crops.append({
