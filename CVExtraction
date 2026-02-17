@@ -8,11 +8,10 @@ def extract_signature_opencv(pil_img):
 
     _, binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
 
-    # =========================
-    # REMOVE STRAIGHT LINES
-    # =========================
+    # ==================================================
+    # 1️⃣ REMOVE STRAIGHT LINES
+    # ==================================================
 
-    # horizontal lines
     horizontal_kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT, (40, 1)
     )
@@ -20,7 +19,6 @@ def extract_signature_opencv(pil_img):
         binary, cv2.MORPH_OPEN, horizontal_kernel
     )
 
-    # vertical lines
     vertical_kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT, (1, 40)
     )
@@ -28,26 +26,52 @@ def extract_signature_opencv(pil_img):
         binary, cv2.MORPH_OPEN, vertical_kernel
     )
 
-    # remove detected straight lines
-    binary_no_lines = binary.copy()
-    binary_no_lines = cv2.subtract(binary_no_lines, horizontal_lines)
-    binary_no_lines = cv2.subtract(binary_no_lines, vertical_lines)
+    binary = cv2.subtract(binary, horizontal_lines)
+    binary = cv2.subtract(binary, vertical_lines)
 
-    # =========================
-    # CONNECTED COMPONENTS
-    # =========================
+    # ==================================================
+    # 2️⃣ REMOVE BOLD TEXT
+    # ==================================================
 
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
-        binary_no_lines, 8
+    # erode thick strokes → bold text disappears faster
+    erosion_kernel = np.ones((2,2), np.uint8)
+    binary_thin = cv2.erode(binary, erosion_kernel, iterations=1)
+
+    # ==================================================
+    # 3️⃣ STROKE DIRECTION VARIANCE (MAGIC STEP)
+    # ==================================================
+
+    sobelx = cv2.Sobel(binary_thin, cv2.CV_64F, 1, 0, ksize=3)
+    sobely = cv2.Sobel(binary_thin, cv2.CV_64F, 0, 1, ksize=3)
+
+    angle = np.arctan2(sobely, sobelx)
+
+    # local angle variation
+    angle_std = cv2.GaussianBlur(
+        np.abs(angle), (15,15), 0
     )
 
-    mask = np.zeros_like(binary_no_lines)
+    # signatures → high variation
+    mask_variation = (angle_std > 0.5).astype(np.uint8)*255
+
+    binary_filtered = cv2.bitwise_and(binary_thin, mask_variation)
+
+    # ==================================================
+    # 4️⃣ CONNECTED COMPONENTS
+    # ==================================================
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        binary_filtered, 8
+    )
+
+    mask = np.zeros_like(binary_filtered)
 
     for i in range(1, num_labels):
 
         x, y, w, h, area = stats[i]
 
-        if area > 150:   # slightly lower now
+        # signature-like shapes
+        if area > 120:
             mask[labels == i] = 255
 
     if np.sum(mask) == 0:
@@ -63,6 +87,7 @@ def extract_signature_opencv(pil_img):
     cropped = cv2.bitwise_not(cropped)
 
     return Image.fromarray(cropped)
+
 
 opencv_results = []
 
