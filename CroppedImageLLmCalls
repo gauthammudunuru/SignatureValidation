@@ -8,7 +8,7 @@ from goldmansachs.openai import OpenAI
 # ================================
 # Parameters
 # ================================
-LLM_ENTROPY_THRESHOLD = 3.0  # After mild background reduction, below this we send to LLM
+LLM_ENTROPY_THRESHOLD = 2.0  # After mild background reduction, below this we send to LLM
 
 # ================================
 # Helper to convert PIL image to base64 string
@@ -21,8 +21,6 @@ def pil_to_base64(pil_img):
 # ================================
 # LLM extraction function
 # ================================
-import json
-
 def extract_info_from_image(image, max_size=1024):
     """
     Extract printed name, date, and handwritten signature using LLM.
