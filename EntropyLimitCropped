@@ -68,3 +68,105 @@ def is_duplicate_same_page(new_rect, existing_rects, tol=10):
             abs(y1 - y2) < tol and
             abs(w1 - w2) < tol and
             abs(h1 - h2) < tol
+        ):
+            return True
+
+    return False
+
+# ======================================================
+# 2a. Background suppression for watermark detection
+# ======================================================
+def remove_background_for_filtering(pil_img):
+    """
+    Suppress background for watermark detection.
+    Keeps printed text + signature intact.
+    """
+    gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
+
+    # Morphological opening to estimate background
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35,35))
+    background = cv2.morphologyEx(gray, cv2.MORPH_OPEN, kernel)
+
+    # Subtract background
+    fg = cv2.subtract(gray, background)
+
+    # Normalize to full range
+    fg = cv2.normalize(fg, None, 0, 255, cv2.NORM_MINMAX)
+
+    return Image.fromarray(fg)
+
+# ======================================================
+# 3. Process all pages with two-pass entropy
+# ======================================================
+LOW_ENTROPY = 2.0
+HIGH_ENTROPY_CANDIDATE = 4.5  # possible watermark blocks
+
+final_crops = []
+
+for page_idx, page in enumerate(pages):
+
+    rects = detect_rectangles(page)
+
+    # remove duplicates only within THIS page
+    unique_rects = []
+    for r in rects:
+        if not is_duplicate_same_page(r, unique_rects):
+            unique_rects.append(r)
+
+    # crop + entropy filter
+    for (x, y, w, h) in unique_rects:
+        crop = page.crop((x, y, x+w, y+h))
+        entropy = calculate_entropy(crop)
+
+        # 1️⃣ Normal signature block
+        if entropy < LOW_ENTROPY:
+            final_crops.append({
+                "page": page_idx + 1,
+                "bbox": (x, y, w, h),
+                "entropy": entropy,
+                "image": crop
+            })
+            continue
+
+        # 2️⃣ Possible watermark block
+        if entropy < HIGH_ENTROPY_CANDIDATE:
+            fg_img = remove_background_for_filtering(crop)
+            new_entropy = calculate_entropy(fg_img)
+
+            if new_entropy < LOW_ENTROPY:
+                final_crops.append({
+                    "page": page_idx + 1,
+                    "bbox": (x, y, w, h),
+                    "entropy": entropy,
+                    "image": crop
+                })
+                print(f"Recovered watermark block at page {page_idx+1}, bbox {(x, y, w, h)}")
+
+print(f"Total cropped images after filtering: {len(final_crops)}")
+
+# ======================================================
+# 4. Display all results
+# ======================================================
+def show_images_grid(items, cols=3, title="Cropped Images"):
+    if len(items) == 0:
+        print("No images to display.")
+        return
+
+    rows = (len(items) + cols - 1) // cols
+    plt.figure(figsize=(5*cols, 5*rows))
+
+    for i, item in enumerate(items):
+        plt.subplot(rows, cols, i+1)
+        plt.imshow(item["image"])
+        plt.axis("off")
+
+        p = item["page"]
+        x, y, w, h = item["bbox"]
+        plt.title(f"P{p} | ({x},{y})")
+
+    plt.suptitle(title, fontsize=16)
+    plt.tight_layout()
+    plt.show()
+
+show_images_grid(final_crops, cols=3,
+                 title="Entropy-filtered crops (duplicates removed per page, watermark included)")
