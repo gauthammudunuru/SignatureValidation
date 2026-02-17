@@ -4,46 +4,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 
 # ==============================
-# 1️⃣ Forensic filtering + sharpening
-# ==============================
-def forensic_signature_mask_sharpen(pil_img, visualize=False):
-    gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
-
-    # Binary inversion
-    _, binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
-
-    # Remove straight lines
-    hor_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40,1))
-    vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1,40))
-    binary = cv2.subtract(binary, cv2.morphologyEx(binary, cv2.MORPH_OPEN, hor_kernel))
-    binary = cv2.subtract(binary, cv2.morphologyEx(binary, cv2.MORPH_OPEN, vert_kernel))
-
-    # Remove bold letters (erosion)
-    binary = cv2.erode(binary, np.ones((2,2), np.uint8), iterations=1)
-
-    # Stroke variation filtering (curves vs straight)
-    sobelx = cv2.Sobel(binary, cv2.CV_64F,1,0,ksize=3)
-    sobely = cv2.Sobel(binary, cv2.CV_64F,0,1,ksize=3)
-    angle = np.arctan2(sobely, sobelx)
-    angle_std = cv2.GaussianBlur(np.abs(angle),(15,15),0)
-    mask_variation = (angle_std > 0.5).astype(np.uint8)*255
-    binary = cv2.bitwise_and(binary, mask_variation)
-
-    # -------------------
-    # Sharpen instead of blur
-    # -------------------
-    kernel = np.array([[0,-1,0],
-                       [-1,5,-1],
-                       [0,-1,0]])
-    binary_sharp = cv2.filter2D(binary, -1, kernel)
-
-    if visualize:
-        plt.figure(); plt.imshow(binary_sharp, cmap='gray'); plt.title("Sharpened mask"); plt.axis("off"); plt.show()
-
-    return binary_sharp
-
-# ==============================
-# 2️⃣ Connected components filter
+# 1️⃣ Connected components filter
 # ==============================
 def connected_components_filter(binary, min_area=120, visualize=False):
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
@@ -56,54 +17,49 @@ def connected_components_filter(binary, min_area=120, visualize=False):
     return mask
 
 # ==============================
-# 3️⃣ Sliding octant window + inter-character distance
+# 2️⃣ Forensic binary mask (no sharpening)
 # ==============================
-def sliding_octant_signature(mask, original_img, visualize=False):
-    h, w = mask.shape
-    win_h, win_w = h//2, w//4
-    step_y, step_x = max(10, win_h//6), max(10, win_w//6)
+def forensic_signature_mask(pil_img, visualize=False):
+    gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
+    _, binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
 
-    best_score, best_bbox = -1, None
+    # Remove straight lines
+    hor_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40,1))
+    vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1,40))
+    binary = cv2.subtract(binary, cv2.morphologyEx(binary, cv2.MORPH_OPEN, hor_kernel))
+    binary = cv2.subtract(binary, cv2.morphologyEx(binary, cv2.MORPH_OPEN, vert_kernel))
 
-    for y in range(0, h - win_h, step_y):
-        for x in range(0, w - win_w, step_x):
-            patch = mask[y:y+win_h, x:x+win_w]
-            coords = cv2.findNonZero(patch)
-            if coords is None: 
-                continue
-            # Bounding box in patch
-            x_min, y_min = np.min(coords[:,:,0]), np.min(coords[:,:,1])
-            x_max, y_max = np.max(coords[:,:,0]), np.max(coords[:,:,1])
-
-            # Inter-character distance analysis
-            xs = np.sort(coords[:,:,0].flatten())
-            if len(xs) < 2:
-                continue
-            gaps = np.diff(xs)
-            # Keep region if max gap < 3 char widths (~20 px)
-            if np.max(gaps) < 20:
-                # Focus weighting: bottom-left
-                weight = 1.0
-                if y > h//2 and x < w//2:
-                    weight = 2.0
-                score = len(coords) * weight
-                if score > best_score:
-                    best_score = score
-                    best_bbox = (x + x_min, y + y_min, x + x_max, y + y_max)
-
-    if best_bbox is None:
-        return None
-
-    # Slightly expand bbox
-    x1,y1,x2,y2 = best_bbox
-    x1,y1 = max(0,x1-5), max(0,y1-5)
-    x2,y2 = min(original_img.width,x2+5), min(original_img.height,y2+5)
-    cropped = original_img.crop((x1,y1,x2,y2))
+    # Remove bold letters (erosion)
+    binary = cv2.erode(binary, np.ones((2,2), np.uint8), iterations=1)
 
     if visualize:
-        plt.figure(); plt.imshow(cropped); plt.axis("off"); plt.title("Final signature crop"); plt.show()
+        plt.figure(); plt.imshow(binary, cmap='gray'); plt.title("Forensic binary mask"); plt.axis("off"); plt.show()
 
-    return cropped
+    return binary
+
+# ==============================
+# 3️⃣ Mask original image with connected components
+# ==============================
+def mask_original_with_cc(original_img, visualize=False):
+    # Step 1: get binary forensic mask
+    binary_mask = forensic_signature_mask(original_img)
+    # Step 2: connected component filtering
+    mask_cc = connected_components_filter(binary_mask)
+
+    # Convert mask to 3-channel for RGB multiplication
+    mask_rgb = cv2.merge([mask_cc]*3)
+    orig_np = np.array(original_img)
+
+    # Apply mask: keep only non-zero pixels
+    result = cv2.bitwise_and(orig_np, mask_rgb)
+
+    # Convert back to PIL
+    result_pil = Image.fromarray(result)
+
+    if visualize:
+        plt.figure(); plt.imshow(result_pil); plt.title("Original image masked by CC"); plt.axis("off"); plt.show()
+
+    return result_pil
 
 # ==============================
 # 4️⃣ Run on final_crops
@@ -112,16 +68,11 @@ results = []
 
 for item in final_crops:
     if item["entropy"] < 2.0:
-        # Step 1: forensic + sharpen
-        mask_sharp = forensic_signature_mask_sharpen(item["image"], visualize=True)
-        # Step 2: connected components
-        mask_cc = connected_components_filter(mask_sharp, visualize=True)
-        # Step 3: sliding window + inter-character distance
-        sig_img = sliding_octant_signature(mask_cc, item["image"], visualize=True)
+        masked_img = mask_original_with_cc(item["image"], visualize=True)
         results.append({
             "page": item["page"],
             "bbox": item["bbox"],
-            "signature": sig_img
+            "signature_image": masked_img
         })
 
 # ==============================
@@ -130,10 +81,7 @@ for item in final_crops:
 def display_results(results):
     for r in results:
         plt.figure(figsize=(4,4))
-        if r["signature"] is not None:
-            plt.imshow(r["signature"])
-        else:
-            plt.text(0.5,0.5,"No signature found",ha="center")
+        plt.imshow(r["signature_image"])
         plt.axis("off")
         plt.title(f"P{r['page']} | {r['bbox']}")
         plt.show()
