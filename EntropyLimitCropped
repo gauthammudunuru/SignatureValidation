@@ -1,9 +1,10 @@
 # ======================================================
-# UPDATED VERSION (NO TRUE DUPLICATES)
+# UPDATED VERSION WITH BACKGROUND SUPPRESSION
 # - Keep page number
 # - Keep location (bbox)
 # - Remove duplicates ONLY if same page + same location
-# - Same sign on different pages or locations is KEPT
+# - Same signature block on different pages/locations is KEPT
+# - Two-pass entropy logic for normal + watermark blocks
 # ======================================================
 
 from pdf2image import convert_from_path
@@ -57,7 +58,6 @@ def detect_rectangles(pil_img, min_area=1000):
 
     return rects
 
-
 # duplicate check ONLY within same page + almost same location
 def is_duplicate_same_page(new_rect, existing_rects, tol=10):
     x1, y1, w1, h1 = new_rect
@@ -68,72 +68,3 @@ def is_duplicate_same_page(new_rect, existing_rects, tol=10):
             abs(y1 - y2) < tol and
             abs(w1 - w2) < tol and
             abs(h1 - h2) < tol
-        ):
-            return True
-
-    return False
-
-
-# ======================================================
-# 3. Process all pages
-# ======================================================
-
-ENTROPY_THRESHOLD = 2.0
-
-# each element keeps metadata
-cropped_images = []
-
-for page_idx, page in enumerate(pages):
-
-    rects = detect_rectangles(page)
-
-    # remove duplicates only within THIS page
-    unique_rects = []
-    for r in rects:
-        if not is_duplicate_same_page(r, unique_rects):
-            unique_rects.append(r)
-
-    # crop + entropy filter
-    for (x, y, w, h) in unique_rects:
-
-        crop = page.crop((x, y, x+w, y+h))
-        entropy = calculate_entropy(crop)
-
-        if entropy < ENTROPY_THRESHOLD:
-            cropped_images.append({
-                "page": page_idx + 1,
-                "bbox": (x, y, w, h),
-                "entropy": entropy,
-                "image": crop
-            })
-
-print(f"Total cropped images after filtering: {len(cropped_images)}")
-
-# ======================================================
-# 4. Display all results
-# ======================================================
-
-def show_images_grid(items, cols=3, title="Cropped Images"):
-    if len(items) == 0:
-        print("No images to display.")
-        return
-
-    rows = (len(items) + cols - 1) // cols
-    plt.figure(figsize=(5*cols, 5*rows))
-
-    for i, item in enumerate(items):
-        plt.subplot(rows, cols, i+1)
-        plt.imshow(item["image"])
-        plt.axis("off")
-
-        p = item["page"]
-        x, y, w, h = item["bbox"]
-
-        plt.title(f"P{p} | ({x},{y})")
-
-    plt.suptitle(title, fontsize=16)
-    plt.tight_layout()
-    plt.show()
-
-show_images_grid(cropped_images, cols=3,
-                 title="Entropy-filtered crops (duplicates removed per page)")
