@@ -170,3 +170,53 @@ def show_images_grid(items, cols=3, title="Cropped Images"):
 
 show_images_grid(final_crops, cols=3,
                  title="Entropy-filtered crops (duplicates removed per page, watermark included)")
+
+
+# ======================================================
+# 5. Visualize high entropy candidates after background removal
+# ======================================================
+
+import matplotlib.pyplot as plt
+
+# Filter high entropy candidates (those processed for watermark)
+high_entropy_images = []
+
+for item in cropped_images:
+    e = item["entropy"]
+    if LOW_ENTROPY <= e < HIGH_ENTROPY_CANDIDATE:
+        # apply background removal
+        fg_img = remove_background_for_filtering(item["image"])
+        new_e = calculate_entropy(fg_img)
+
+        high_entropy_images.append({
+            "page": item["page"],
+            "bbox": item["bbox"],
+            "original_entropy": e,
+            "new_entropy": new_e,
+            "image": fg_img
+        })
+
+# Display all with new entropy
+def show_high_entropy_images(items, cols=3, title="High Entropy Watermark Candidates"):
+    if len(items) == 0:
+        print("No high-entropy images to display.")
+        return
+
+    rows = (len(items) + cols - 1) // cols
+    plt.figure(figsize=(5*cols, 5*rows))
+
+    for i, item in enumerate(items):
+        plt.subplot(rows, cols, i+1)
+        plt.imshow(item["image"], cmap="gray")
+        plt.axis("off")
+
+        p = item["page"]
+        x, y, w, h = item["bbox"]
+        new_e = item["new_entropy"]
+        plt.title(f"P{p} | ({x},{y}) | Entropy={new_e:.2f}", fontsize=9)
+
+    plt.suptitle(title, fontsize=16)
+    plt.tight_layout()
+    plt.show()
+
+show_high_entropy_images(high_entropy_images)
