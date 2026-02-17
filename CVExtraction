@@ -1,5 +1,5 @@
 # ======================================================
-# FORENSIC FILTERING + QUARTER ANALYSIS (COMBINED)
+# FORENSIC FILTERING + SLIDING OCTANT WINDOW DETECTOR
 # ======================================================
 
 import cv2
@@ -17,31 +17,30 @@ def forensic_signature_mask(pil_img):
 
     _, binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
 
-    # ---- remove straight lines ----
+    # remove straight lines
     horizontal_kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT, (40,1)
     )
-    horizontal_lines = cv2.morphologyEx(
-        binary, cv2.MORPH_OPEN, horizontal_kernel
-    )
-
     vertical_kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT, (1,40)
     )
-    vertical_lines = cv2.morphologyEx(
-        binary, cv2.MORPH_OPEN, vertical_kernel
+
+    binary = cv2.subtract(
+        binary,
+        cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel)
     )
 
-    binary = cv2.subtract(binary, horizontal_lines)
-    binary = cv2.subtract(binary, vertical_lines)
+    binary = cv2.subtract(
+        binary,
+        cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel)
+    )
 
-    # ---- remove bold text (light erosion) ----
-    erosion_kernel = np.ones((2,2), np.uint8)
-    binary = cv2.erode(binary, erosion_kernel, iterations=1)
+    # remove bold text
+    binary = cv2.erode(binary, np.ones((2,2),np.uint8), iterations=1)
 
-    # ---- stroke direction variation ----
-    sobelx = cv2.Sobel(binary, cv2.CV_64F, 1,0,ksize=3)
-    sobely = cv2.Sobel(binary, cv2.CV_64F, 0,1,ksize=3)
+    # direction variation (signature-like flow)
+    sobelx = cv2.Sobel(binary, cv2.CV_64F,1,0,ksize=3)
+    sobely = cv2.Sobel(binary, cv2.CV_64F,0,1,ksize=3)
 
     angle = np.arctan2(sobely, sobelx)
     angle_std = cv2.GaussianBlur(np.abs(angle),(15,15),0)
@@ -50,14 +49,14 @@ def forensic_signature_mask(pil_img):
 
     binary = cv2.bitwise_and(binary, mask_variation)
 
-    # ---- connected components cleanup ----
+    # connected components cleanup
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary,8)
 
     mask = np.zeros_like(binary)
 
     for i in range(1,num_labels):
 
-        x,y,w,h,area = stats[i]
+        area = stats[i, cv2.CC_STAT_AREA]
 
         if area > 120:
             mask[labels==i] = 255
@@ -66,63 +65,71 @@ def forensic_signature_mask(pil_img):
 
 
 # ------------------------------------------------------
-# 2️⃣ Quarter density analysis
+# 2️⃣ Sliding octant window search
 # ------------------------------------------------------
-def find_signature_region(mask):
+def sliding_octant_search(mask):
 
     h, w = mask.shape
 
-    regions = [
-        (0, h//2, 0, w//2),
-        (0, h//2, w//2, w),
-        (h//2, h, 0, w//2),
-        (h//2, h, w//2, w)
-    ]
+    # octant window size (~1/8 image)
+    win_h = h // 2
+    win_w = w // 4
 
-    scores = []
+    best_score = -1
+    best_bbox = None
 
-    for r in regions:
-        y1,y2,x1,x2 = r
-        patch = mask[y1:y2, x1:x2]
-        score = np.sum(patch > 0)
-        scores.append(score)
+    # stride = small step for smooth search
+    step_y = max(10, win_h // 6)
+    step_x = max(10, win_w // 6)
 
-    best_idx = np.argmax(scores)
+    for y in range(0, h - win_h, step_y):
+        for x in range(0, w - win_w, step_x):
 
-    return regions[best_idx]
+            patch = mask[y:y+win_h, x:x+win_w]
+
+            # ink density score
+            score = np.sum(patch > 0)
+
+            if score > best_score:
+                best_score = score
+                best_bbox = (x, y, x+win_w, y+win_h)
+
+    return best_bbox
 
 
 # ------------------------------------------------------
-# 3️⃣ Expand bbox
+# 3️⃣ Expand bbox slightly
 # ------------------------------------------------------
-def expand_bbox(region, shape, margin=30):
+def expand_bbox(bbox, shape, margin=20):
 
-    y1,y2,x1,x2 = region
+    x1,y1,x2,y2 = bbox
     h,w = shape
 
-    y1 = max(0,y1-margin)
-    y2 = min(h,y2+margin)
-    x1 = max(0,x1-margin)
-    x2 = min(w,x2+margin)
+    x1 = max(0, x1-margin)
+    y1 = max(0, y1-margin)
+    x2 = min(w, x2+margin)
+    y2 = min(h, y2+margin)
 
-    return y1,y2,x1,x2
+    return x1,y1,x2,y2
 
 
 # ------------------------------------------------------
-# 4️⃣ Final extractor (mask → quarter → original crop)
+# 4️⃣ Final extractor
 # ------------------------------------------------------
-def extract_signature_final(pil_img):
+def extract_signature_sliding(pil_img):
 
     mask = forensic_signature_mask(pil_img)
 
     if np.sum(mask)==0:
         return None
 
-    region = find_signature_region(mask)
+    bbox = sliding_octant_search(mask)
 
-    y1,y2,x1,x2 = expand_bbox(region, mask.shape)
+    bbox = expand_bbox(bbox, mask.shape)
 
-    # crop ORIGINAL image (important)
+    x1,y1,x2,y2 = bbox
+
+    # crop ORIGINAL image
     cropped = pil_img.crop((x1,y1,x2,y2))
 
     return cropped
@@ -131,18 +138,18 @@ def extract_signature_final(pil_img):
 # ------------------------------------------------------
 # 5️⃣ Run on final_crops
 # ------------------------------------------------------
-combined_results = []
+results = []
 
 for item in final_crops:
 
     if item["entropy"] < 2.0:
 
-        sig_img = extract_signature_final(item["image"])
+        sig = extract_signature_sliding(item["image"])
 
-        combined_results.append({
+        results.append({
             "page": item["page"],
             "bbox": item["bbox"],
-            "signature": sig_img
+            "signature": sig
         })
 
 
@@ -165,4 +172,4 @@ def display_results(results):
         plt.show()
 
 
-display_results(combined_results)
+display_results(results)
