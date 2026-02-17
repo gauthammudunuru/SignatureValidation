@@ -2,6 +2,8 @@ import base64
 import io
 import matplotlib.pyplot as plt
 from PIL import Image
+import json
+from goldmansachs.openai import OpenAI
 
 # ================================
 # Parameters
@@ -19,18 +21,39 @@ def pil_to_base64(pil_img):
 # ================================
 # LLM extraction function
 # ================================
-def extract_info_from_image(image):
-    img_b64 = pil_to_base64(image)
+import json
 
+def extract_info_from_image(image, max_size=1024):
+    """
+    Extract printed name, date, and handwritten signature using LLM.
+    - Downscale large images to max_size to reduce token usage.
+    - Safely escape base64 for JSON prompt.
+    """
+
+    client = OpenAI()
+
+    # 1️⃣ Downscale if too large
+    img_copy = image.copy()
+    img_copy.thumbnail((max_size, max_size))  # keeps aspect ratio
+
+    # 2️⃣ Convert to base64
+    buf = io.BytesIO()
+    img_copy.save(buf, format="PNG")
+    img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    # 3️⃣ Safely escape base64 for JSON
+    safe_b64 = json.dumps(img_b64)  # escape all control chars
+
+    # 4️⃣ Build prompt
     prompt = f"""
-You are given a PNG image encoded in base64 (variable `img_b64`) of a PDF rectangle
-that may contain handwritten signatures and printed text.
+You are given a PNG image in base64 format (variable `img_b64`):
+
+Base64: {safe_b64}
 
 Tasks:
-1. Identify any printed name and date in the image. Return as strings.
-2. Identify the handwritten signature. Return the cropped signature image
-   as a base64-encoded PNG.
-3. Return ONLY JSON in the format:
+1. Extract any printed name and date from the image. Return as strings.
+2. Extract the handwritten signature region as a base64 PNG.
+3. Return ONLY JSON in this format:
 
 {{
   "printed_name": "<extracted printed name or empty string>",
@@ -39,9 +62,24 @@ Tasks:
 }}
 
 Do not include explanations. Only return valid JSON.
-Base64 of image:
-{img_b64}
 """
+
+    try:
+        response = client.chat.completion.create(
+            model="Qwen3-omni",
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        content = response.choices[0].message.content
+
+        # Sometimes LLM outputs extra whitespace/newlines
+        content = content.strip()
+
+        return json.loads(content)
+
+    except Exception as e:
+        print("LLM call failed:", e)
+        return {"printed_name": "", "date": "", "signature_image": ""}
 
     try:
         response = client.chat.completion.create(
