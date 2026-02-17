@@ -1,0 +1,76 @@
+# =========================
+# 1. Read PDF → all pages
+# =========================
+from pdf2image import convert_from_path
+from PIL import Image
+import numpy as np
+import cv2
+
+# Load all pages as PIL images
+pages = convert_from_path("document.pdf", dpi=300)
+
+# =========================
+# 2. Helper: entropy
+# =========================
+def calculate_entropy(pil_img):
+    gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
+    hist = np.histogram(gray.flatten(), bins=256)[0]
+    hist = hist / hist.sum()
+    entropy = -np.sum(hist * np.log2(hist + 1e-8))
+    return entropy
+
+# =========================
+# 3. Rectangle detection
+# =========================
+def detect_rectangles(pil_img, min_area=1000):
+    img_np = np.array(pil_img)
+    img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5,5), 0)
+    edges = cv2.Canny(blur, 50, 150)
+
+    contours, _ = cv2.findContours(
+        edges,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    rects = []
+    for c in contours:
+        approx = cv2.approxPolyDP(
+            c,
+            0.02 * cv2.arcLength(c, True),
+            True
+        )
+
+        if len(approx) == 4:
+            x, y, w, h = cv2.boundingRect(approx)
+            if w * h > min_area:
+                rects.append((x, y, w, h))
+
+    return rects
+
+# =========================
+# 4. Process ALL pages
+#    - rectangle filtering
+#    - entropy filtering (<2)
+# =========================
+cropped_images = []
+
+ENTROPY_THRESHOLD = 2.0
+
+for page_idx, page in enumerate(pages):
+
+    rects = detect_rectangles(page)
+
+    for r_idx, (x, y, w, h) in enumerate(rects):
+
+        crop = page.crop((x, y, x+w, y+h))
+
+        entropy = calculate_entropy(crop)
+
+        if entropy < ENTROPY_THRESHOLD:
+            cropped_images.append(crop)
+
+print(f"Total cropped images after entropy filtering: {len(cropped_images)}")
