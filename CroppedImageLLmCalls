@@ -1,0 +1,129 @@
+import base64
+import io
+import matplotlib.pyplot as plt
+from PIL import Image
+
+# ================================
+# Parameters
+# ================================
+LLM_ENTROPY_THRESHOLD = 3.0  # After mild background reduction, below this we send to LLM
+
+# ================================
+# Helper to convert PIL image to base64 string
+# ================================
+def pil_to_base64(pil_img):
+    buf = io.BytesIO()
+    pil_img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode('utf-8')
+
+# ================================
+# LLM extraction function
+# ================================
+def extract_info_from_image(image):
+    img_b64 = pil_to_base64(image)
+
+    prompt = f"""
+You are given a PNG image encoded in base64 (variable `img_b64`) of a PDF rectangle
+that may contain handwritten signatures and printed text.
+
+Tasks:
+1. Identify any printed name and date in the image. Return as strings.
+2. Identify the handwritten signature. Return the cropped signature image
+   as a base64-encoded PNG.
+3. Return ONLY JSON in the format:
+
+{{
+  "printed_name": "<extracted printed name or empty string>",
+  "date": "<extracted date or empty string>",
+  "signature_image": "<base64 string of signature image or empty string>"
+}}
+
+Do not include explanations. Only return valid JSON.
+Base64 of image:
+{img_b64}
+"""
+
+    try:
+        response = client.chat.completion.create(
+            model="Qwen3-omni",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        import json
+        content = response.choices[0].message.content
+        return json.loads(content)
+    except Exception as e:
+        print("LLM call failed:", e)
+        return {"printed_name": "", "date": "", "signature_image": ""}
+
+# ================================
+# Process crops for LLM vs manual check
+# ================================
+processed_results = []
+
+for item in final_crops:
+    # mild background reduction
+    processed_img = foreground_black_background_white(item['image'])
+    new_entropy = calculate_entropy(processed_img)
+
+    if new_entropy < LLM_ENTROPY_THRESHOLD:
+        # Safe to send to LLM
+        llm_res = extract_info_from_image(processed_img)
+        processed_results.append({
+            "page": item["page"],
+            "bbox": item["bbox"],
+            "original_image": item["image"],
+            "processed_image": processed_img,
+            "printed_name": llm_res.get("printed_name", ""),
+            "date": llm_res.get("date", ""),
+            "signature_image_b64": llm_res.get("signature_image", ""),
+            "manual_check_required": False
+        })
+    else:
+        # High entropy → manual check recommended
+        processed_results.append({
+            "page": item["page"],
+            "bbox": item["bbox"],
+            "original_image": item["image"],
+            "processed_image": processed_img,
+            "printed_name": "",
+            "date": "",
+            "signature_image_b64": "",
+            "manual_check_required": True
+        })
+
+# ================================
+# Display results
+# ================================
+def display_llm_results_with_manual_check(results):
+    for r in results:
+        plt.figure(figsize=(10,5))
+
+        # Left: original image
+        plt.subplot(1,2,1)
+        plt.imshow(r["original_image"])
+        plt.axis("off")
+        plt.title(f"P{r['page']} | bbox={r['bbox']}", fontsize=10)
+
+        # Right: processed + extracted info / manual check
+        plt.subplot(1,2,2)
+        if r["manual_check_required"]:
+            # Show processed image with warning
+            plt.imshow(r["processed_image"])
+            plt.axis("off")
+            plt.title("Manual check recommended", fontsize=10)
+        else:
+            # Show extracted signature if available
+            if r["signature_image_b64"]:
+                sig_bytes = base64.b64decode(r["signature_image_b64"])
+                sig_img = Image.open(io.BytesIO(sig_bytes))
+                plt.imshow(sig_img)
+            else:
+                plt.imshow(r["processed_image"])
+            plt.axis("off")
+            plt.title(f"Name: {r['printed_name']}\nDate: {r['date']}", fontsize=10)
+
+        plt.tight_layout()
+        plt.show()
+
+# Display
+display_llm_results_with_manual_check(processed_results)
