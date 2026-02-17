@@ -1,41 +1,27 @@
-# ======================================================
-# HANDWRITTEN SIGNATURE EXTRACTION WITH STAGE VISUALIZATION
-# ======================================================
-
 import cv2
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 
-# ------------------------------------------------------
-# 1️⃣ Forensic filtering mask
-# ------------------------------------------------------
-def forensic_signature_mask(pil_img, visualize=False):
+# -----------------------------
+# 1️⃣ Forensic filtering + blur
+# -----------------------------
+def forensic_signature_mask_blur(pil_img, visualize=False):
     gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
 
-    # Basic binary inversion
+    # Binary inversion
     _, binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
 
-    if visualize:
-        plt.figure(); plt.imshow(binary, cmap='gray'); plt.title("Binary inversion"); plt.axis("off"); plt.show()
-
-    # Remove straight lines (horizontal + vertical)
+    # Remove straight lines
     hor_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40,1))
     vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1,40))
+    binary = cv2.subtract(binary, cv2.morphologyEx(binary, cv2.MORPH_OPEN, hor_kernel))
+    binary = cv2.subtract(binary, cv2.morphologyEx(binary, cv2.MORPH_OPEN, vert_kernel))
 
-    horizontal_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, hor_kernel)
-    vertical_lines   = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vert_kernel)
-
-    binary = cv2.subtract(binary, horizontal_lines)
-    binary = cv2.subtract(binary, vertical_lines)
-
-    if visualize:
-        plt.figure(); plt.imshow(binary, cmap='gray'); plt.title("After line removal"); plt.axis("off"); plt.show()
-
-    # Remove bold text (erosion)
+    # Remove bold letters (erosion)
     binary = cv2.erode(binary, np.ones((2,2), np.uint8), iterations=1)
 
-    # Stroke variation filtering (signature-like curvy strokes)
+    # Stroke variation filtering (curves vs straight)
     sobelx = cv2.Sobel(binary, cv2.CV_64F,1,0,ksize=3)
     sobely = cv2.Sobel(binary, cv2.CV_64F,0,1,ksize=3)
     angle = np.arctan2(sobely, sobelx)
@@ -43,102 +29,100 @@ def forensic_signature_mask(pil_img, visualize=False):
     mask_variation = (angle_std > 0.5).astype(np.uint8)*255
     binary = cv2.bitwise_and(binary, mask_variation)
 
-    if visualize:
-        plt.figure(); plt.imshow(binary, cmap='gray'); plt.title("After stroke variation filtering"); plt.axis("off"); plt.show()
+    # Slight blur before connected components
+    binary_blur = cv2.GaussianBlur(binary, (5,5), 0)
 
-    # Connected components to remove tiny noise
+    if visualize:
+        plt.figure(); plt.imshow(binary_blur, cmap='gray'); plt.title("Blurred mask"); plt.axis("off"); plt.show()
+
+    return binary_blur
+
+# -----------------------------
+# 2️⃣ Connected components filter
+# -----------------------------
+def connected_components_filter(binary, min_area=120, visualize=False):
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
     mask = np.zeros_like(binary)
     for i in range(1, num_labels):
-        area = stats[i, cv2.CC_STAT_AREA]
-        if area > 120:
+        if stats[i, cv2.CC_STAT_AREA] > min_area:
             mask[labels==i] = 255
-
     if visualize:
         plt.figure(); plt.imshow(mask, cmap='gray'); plt.title("After connected components"); plt.axis("off"); plt.show()
-
     return mask
 
-
-# ------------------------------------------------------
-# 2️⃣ Sliding octant window, bottom-left focused
-# ------------------------------------------------------
-def sliding_window_signature(mask, focus_weight=2.0):
+# -----------------------------
+# 3️⃣ Sliding octant window + word distance check
+# -----------------------------
+def sliding_octant_signature(mask, original_img, visualize=False):
     h, w = mask.shape
     win_h, win_w = h//2, w//4
     step_y, step_x = max(10, win_h//6), max(10, win_w//6)
 
     best_score, best_bbox = -1, None
+
     for y in range(0, h - win_h, step_y):
         for x in range(0, w - win_w, step_x):
             patch = mask[y:y+win_h, x:x+win_w]
-            score = np.sum(patch > 0)
+            coords = cv2.findNonZero(patch)
+            if coords is None: 
+                continue
+            # Compute bounding box in this patch
+            x_min, y_min = np.min(coords[:,:,0]), np.min(coords[:,:,1])
+            x_max, y_max = np.max(coords[:,:,0]), np.max(coords[:,:,1])
 
-            # Apply focus weighting: bottom-left has higher weight
-            weight = 1.0
-            if y > h//2 and x < w//2:
-                weight = focus_weight
-            score *= weight
+            # Inter-character distance analysis
+            xs = np.sort(coords[:,:,0].flatten())
+            if len(xs) < 2:
+                continue
+            gaps = np.diff(xs)
+            # Keep region if max gap < 3 char widths (~20 px)
+            if np.max(gaps) < 20:
+                # Focus weighting: bottom-left
+                weight = 1.0
+                if y > h//2 and x < w//2:
+                    weight = 2.0
+                score = len(coords) * weight
+                if score > best_score:
+                    best_score = score
+                    # Map patch bbox to original image coordinates
+                    best_bbox = (x + x_min, y + y_min, x + x_max, y + y_max)
 
-            if score > best_score:
-                best_score = score
-                best_bbox = (x, y, x+win_w, y+win_h)
-
-    return best_bbox
-
-
-# ------------------------------------------------------
-# 3️⃣ Expand bbox slightly
-# ------------------------------------------------------
-def expand_bbox(bbox, shape, margin=20):
-    x1,y1,x2,y2 = bbox
-    h,w = shape
-    x1 = max(0, x1-margin)
-    y1 = max(0, y1-margin)
-    x2 = min(w, x2+margin)
-    y2 = min(h, y2+margin)
-    return x1,y1,x2,y2
-
-
-# ------------------------------------------------------
-# 4️⃣ Extract signature window from original image
-# ------------------------------------------------------
-def extract_signature_window(pil_img, visualize=False):
-    mask = forensic_signature_mask(pil_img, visualize=visualize)
-
-    if np.sum(mask)==0:
+    if best_bbox is None:
         return None
 
-    bbox = sliding_window_signature(mask)
-    bbox = expand_bbox(bbox, mask.shape)
-    x1,y1,x2,y2 = bbox
-
-    cropped = pil_img.crop((x1,y1,x2,y2))
+    # Slightly expand bbox
+    x1,y1,x2,y2 = best_bbox
+    x1,y1 = max(0,x1-5), max(0,y1-5)
+    x2,y2 = min(original_img.width,x2+5), min(original_img.height,y2+5)
+    cropped = original_img.crop((x1,y1,x2,y2))
 
     if visualize:
-        plt.figure(figsize=(4,4)); plt.imshow(cropped); plt.axis("off"); plt.title("Final cropped signature window"); plt.show()
+        plt.figure(); plt.imshow(cropped); plt.axis("off"); plt.title("Final signature crop"); plt.show()
 
     return cropped
 
-
-# ------------------------------------------------------
-# 5️⃣ Run on final_crops
-# ------------------------------------------------------
+# -----------------------------
+# 4️⃣ Run on final_crops
+# -----------------------------
 results = []
 
 for item in final_crops:
     if item["entropy"] < 2.0:
-        sig_img = extract_signature_window(item["image"], visualize=True)
+        # Step 1: forensic + blur
+        mask_blur = forensic_signature_mask_blur(item["image"], visualize=True)
+        # Step 2: connected components
+        mask_cc = connected_components_filter(mask_blur, visualize=True)
+        # Step 3: sliding window + inter-character distance
+        sig_img = sliding_octant_signature(mask_cc, item["image"], visualize=True)
         results.append({
             "page": item["page"],
             "bbox": item["bbox"],
             "signature": sig_img
         })
 
-
-# ------------------------------------------------------
-# 6️⃣ Display
-# ------------------------------------------------------
+# -----------------------------
+# 5️⃣ Display final signature images
+# -----------------------------
 def display_results(results):
     for r in results:
         plt.figure(figsize=(4,4))
