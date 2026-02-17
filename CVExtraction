@@ -1,0 +1,80 @@
+import cv2
+import numpy as np
+from PIL import Image
+
+def extract_signature_opencv(pil_img):
+    """
+    Extract handwritten signature using connected components.
+    Assumes black strokes on white background.
+    """
+
+    # convert to grayscale
+    gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
+
+    # binary (black=foreground)
+    _, binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
+
+    # connected components
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+
+    # build mask for large components
+    mask = np.zeros_like(binary)
+
+    for i in range(1, num_labels):  # skip background
+        x, y, w, h, area = stats[i]
+
+        # ignore tiny components (printed chars / noise)
+        if area > 200:   # adjust if needed
+            mask[labels == i] = 255
+
+    # if nothing detected
+    if np.sum(mask) == 0:
+        return None
+
+    # crop tight bbox around signature
+    ys, xs = np.where(mask > 0)
+
+    x1, x2 = xs.min(), xs.max()
+    y1, y2 = ys.min(), ys.max()
+
+    cropped = mask[y1:y2, x1:x2]
+
+    # convert back to white bg / black strokes
+    cropped = cv2.bitwise_not(cropped)
+
+    return Image.fromarray(cropped)
+
+opencv_results = []
+
+for item in final_crops:
+
+    if item["entropy"] < 2.0:
+
+        sig_img = extract_signature_opencv(item["image"])
+
+        opencv_results.append({
+            "page": item["page"],
+            "bbox": item["bbox"],
+            "signature": sig_img
+        })
+
+
+import matplotlib.pyplot as plt
+
+def display_opencv_signatures(results):
+
+    for r in results:
+
+        plt.figure(figsize=(4,4))
+
+        if r["signature"] is not None:
+            plt.imshow(r["signature"], cmap="gray")
+        else:
+            plt.text(0.5,0.5,"No signature found", ha="center")
+
+        plt.axis("off")
+        plt.title(f"P{r['page']} | bbox={r['bbox']}")
+        plt.show()
+
+display_opencv_signatures(opencv_results)
+
