@@ -74,3 +74,30 @@ for page_idx, page in enumerate(pages):
             cropped_images.append(crop)
 
 print(f"Total cropped images after entropy filtering: {len(cropped_images)}")
+
+# =========================
+# Show all cropped images
+# =========================
+import matplotlib.pyplot as plt
+
+def show_images_grid(images, cols=3, title="Cropped Images"):
+    if len(images) == 0:
+        print("No images to display.")
+        return
+
+    rows = (len(images) + cols - 1) // cols
+    plt.figure(figsize=(5*cols, 5*rows))
+
+    for i, img in enumerate(images):
+        plt.subplot(rows, cols, i + 1)
+        plt.imshow(img)
+        plt.axis("off")
+        plt.title(f"Image {i+1}")
+
+    plt.suptitle(title, fontsize=16)
+    plt.tight_layout()
+    plt.show()
+
+# Display all images
+show_images_grid(cropped_images, cols=3, title="Entropy-Filtered Cropped Images")
+
