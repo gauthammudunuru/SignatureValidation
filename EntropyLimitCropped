@@ -171,9 +171,76 @@ def show_images_grid(items, cols=3, title="Cropped Images"):
 show_images_grid(final_crops, cols=3,
                  title="Entropy-filtered crops (duplicates removed per page, watermark included)")
 
+# ======================================================
+# 5. Mild_background_reduction
+# ======================================================
+
+def mild_background_reduction(pil_img):
+    """
+    Light background reduction in original RGB space.
+    - Keeps printed text and signature intact
+    - Reduces large smooth background variations
+    """
+    img_rgb = np.array(pil_img).astype(np.uint8)
+
+    # Convert to LAB to separate lightness channel
+    lab = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2LAB)
+    l, a, b = cv2.split(lab)
+
+    # Estimate background using large morphological opening on lightness channel
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35,35))
+    background = cv2.morphologyEx(l, cv2.MORPH_OPEN, kernel)
+
+    # Subtract background softly
+    l_reduced = cv2.subtract(l, background)
+    l_reduced = cv2.normalize(l_reduced, None, 0, 255, cv2.NORM_MINMAX)
+
+    # Merge back channels
+    lab_reduced = cv2.merge([l_reduced, a, b])
+    img_reduced = cv2.cvtColor(lab_reduced, cv2.COLOR_LAB2RGB)
+
+    return Image.fromarray(img_reduced)
 
 # ======================================================
-# 5. Visualize high entropy candidates after background removal
+# 6. Visualize high entropy candidates after background removal
+# ======================================================
+
+final_crops = []
+
+for item in cropped_images:
+    img = item["image"]
+    entropy = calculate_entropy(img)
+
+    # 1️⃣ normal signature blocks
+    if entropy < LOW_ENTROPY:
+        final_crops.append({
+            "page": item["page"],
+            "bbox": item["bbox"],
+            "entropy": entropy,
+            "image": img
+        })
+        continue
+
+    # 2️⃣ high-entropy watermark candidates
+    if entropy < HIGH_ENTROPY_CANDIDATE:
+        # use background suppression for filtering
+        fg_img = remove_background_for_filtering(img)
+        new_entropy = calculate_entropy(fg_img)
+
+        if new_entropy < LOW_ENTROPY:
+            # mild background reduction on original RGB
+            mild_img = mild_background_reduction(img)
+
+            final_crops.append({
+                "page": item["page"],
+                "bbox": item["bbox"],
+                "entropy": entropy,
+                "image": mild_img
+            })
+            print(f"Recovered watermark block at page {item['page']}, bbox {item['bbox']}, new entropy={new_entropy:.2f}")
+
+# ======================================================
+# 7. Visualize high entropy candidates after background removal
 # ======================================================
 
 import matplotlib.pyplot as plt
