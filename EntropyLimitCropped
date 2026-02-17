@@ -1,10 +1,10 @@
 # ======================================================
-# UPDATED VERSION WITH BACKGROUND SUPPRESSION
+# FULL END-TO-END PDF SIGNATURE BLOCK EXTRACTION
 # - Keep page number
 # - Keep location (bbox)
 # - Remove duplicates ONLY if same page + same location
-# - Same signature block on different pages/locations is KEPT
-# - Two-pass entropy logic for normal + watermark blocks
+# - Two-pass entropy: normal + watermark detection
+# - Mild background reduction in RGB for watermark blocks
 # ======================================================
 
 from pdf2image import convert_from_path
@@ -23,7 +23,12 @@ pages = convert_from_path("document.pdf", dpi=300)
 # ======================================================
 
 def calculate_entropy(pil_img):
-    gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
+    arr = np.array(pil_img)
+    # handle grayscale or RGB
+    if len(arr.shape) == 3 and arr.shape[2] == 3:
+        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = arr
     hist = np.histogram(gray.flatten(), bins=256)[0]
     hist = hist / hist.sum()
     entropy = -np.sum(hist * np.log2(hist + 1e-8))
@@ -96,6 +101,34 @@ def remove_background_for_filtering(pil_img):
     return Image.fromarray(fg)
 
 # ======================================================
+# 2b. Mild background reduction in original RGB
+# ======================================================
+def mild_background_reduction(pil_img):
+    """
+    Light background reduction in original RGB space.
+    Keeps printed text + signature intact.
+    """
+    img_rgb = np.array(pil_img).astype(np.uint8)
+
+    # Convert to LAB to separate lightness channel
+    lab = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2LAB)
+    l, a, b = cv2.split(lab)
+
+    # Estimate background using large morphological opening
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35,35))
+    background = cv2.morphologyEx(l, cv2.MORPH_OPEN, kernel)
+
+    # Subtract background softly
+    l_reduced = cv2.subtract(l, background)
+    l_reduced = cv2.normalize(l_reduced, None, 0, 255, cv2.NORM_MINMAX)
+
+    # Merge back channels
+    lab_reduced = cv2.merge([l_reduced, a, b])
+    img_reduced = cv2.cvtColor(lab_reduced, cv2.COLOR_LAB2RGB)
+
+    return Image.fromarray(img_reduced)
+
+# ======================================================
 # 3. Process all pages with two-pass entropy
 # ======================================================
 LOW_ENTROPY = 2.0
@@ -118,7 +151,7 @@ for page_idx, page in enumerate(pages):
         crop = page.crop((x, y, x+w, y+h))
         entropy = calculate_entropy(crop)
 
-        # 1️⃣ Normal signature block
+        # 1️⃣ normal signature block
         if entropy < LOW_ENTROPY:
             final_crops.append({
                 "page": page_idx + 1,
@@ -128,19 +161,23 @@ for page_idx, page in enumerate(pages):
             })
             continue
 
-        # 2️⃣ Possible watermark block
+        # 2️⃣ high-entropy watermark candidates
         if entropy < HIGH_ENTROPY_CANDIDATE:
             fg_img = remove_background_for_filtering(crop)
-            new_entropy = calculate_entropy(fg_img)
+            # ensure RGB before entropy to avoid errors
+            fg_img_rgb = fg_img.convert("RGB")
+            new_entropy = calculate_entropy(fg_img_rgb)
 
             if new_entropy < LOW_ENTROPY:
+                # apply mild background reduction on original RGB image
+                mild_img = mild_background_reduction(crop)
                 final_crops.append({
                     "page": page_idx + 1,
                     "bbox": (x, y, w, h),
                     "entropy": entropy,
-                    "image": crop
+                    "image": mild_img
                 })
-                print(f"Recovered watermark block at page {page_idx+1}, bbox {(x, y, w, h)}")
+                print(f"Recovered watermark block at page {page_idx+1}, bbox {(x, y, w, h)}, new entropy={new_entropy:.2f}")
 
 print(f"Total cropped images after filtering: {len(final_crops)}")
 
@@ -162,128 +199,11 @@ def show_images_grid(items, cols=3, title="Cropped Images"):
 
         p = item["page"]
         x, y, w, h = item["bbox"]
-        plt.title(f"P{p} | ({x},{y})")
+        plt.title(f"P{p} | ({x},{y})", fontsize=9)
 
     plt.suptitle(title, fontsize=16)
     plt.tight_layout()
     plt.show()
 
 show_images_grid(final_crops, cols=3,
-                 title="Entropy-filtered crops (duplicates removed per page, watermark included)")
-
-# ======================================================
-# 5. Mild_background_reduction
-# ======================================================
-
-def mild_background_reduction(pil_img):
-    """
-    Light background reduction in original RGB space.
-    - Keeps printed text and signature intact
-    - Reduces large smooth background variations
-    """
-    img_rgb = np.array(pil_img).astype(np.uint8)
-
-    # Convert to LAB to separate lightness channel
-    lab = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2LAB)
-    l, a, b = cv2.split(lab)
-
-    # Estimate background using large morphological opening on lightness channel
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35,35))
-    background = cv2.morphologyEx(l, cv2.MORPH_OPEN, kernel)
-
-    # Subtract background softly
-    l_reduced = cv2.subtract(l, background)
-    l_reduced = cv2.normalize(l_reduced, None, 0, 255, cv2.NORM_MINMAX)
-
-    # Merge back channels
-    lab_reduced = cv2.merge([l_reduced, a, b])
-    img_reduced = cv2.cvtColor(lab_reduced, cv2.COLOR_LAB2RGB)
-
-    return Image.fromarray(img_reduced)
-
-# ======================================================
-# 6. Visualize high entropy candidates after background removal
-# ======================================================
-
-final_crops = []
-
-for item in cropped_images:
-    img = item["image"]
-    entropy = calculate_entropy(img)
-
-    # 1️⃣ normal signature blocks
-    if entropy < LOW_ENTROPY:
-        final_crops.append({
-            "page": item["page"],
-            "bbox": item["bbox"],
-            "entropy": entropy,
-            "image": img
-        })
-        continue
-
-    # 2️⃣ high-entropy watermark candidates
-    if entropy < HIGH_ENTROPY_CANDIDATE:
-        # use background suppression for filtering
-        fg_img = remove_background_for_filtering(img)
-        new_entropy = calculate_entropy(fg_img)
-
-        if new_entropy < LOW_ENTROPY:
-            # mild background reduction on original RGB
-            mild_img = mild_background_reduction(img)
-
-            final_crops.append({
-                "page": item["page"],
-                "bbox": item["bbox"],
-                "entropy": entropy,
-                "image": mild_img
-            })
-            print(f"Recovered watermark block at page {item['page']}, bbox {item['bbox']}, new entropy={new_entropy:.2f}")
-
-# ======================================================
-# 7. Visualize high entropy candidates after background removal
-# ======================================================
-
-import matplotlib.pyplot as plt
-
-# Filter high entropy candidates (those processed for watermark)
-high_entropy_images = []
-
-for item in cropped_images:
-    e = item["entropy"]
-    if LOW_ENTROPY <= e < HIGH_ENTROPY_CANDIDATE:
-        # apply background removal
-        fg_img = remove_background_for_filtering(item["image"])
-        new_e = calculate_entropy(fg_img)
-
-        high_entropy_images.append({
-            "page": item["page"],
-            "bbox": item["bbox"],
-            "original_entropy": e,
-            "new_entropy": new_e,
-            "image": fg_img
-        })
-
-# Display all with new entropy
-def show_high_entropy_images(items, cols=3, title="High Entropy Watermark Candidates"):
-    if len(items) == 0:
-        print("No high-entropy images to display.")
-        return
-
-    rows = (len(items) + cols - 1) // cols
-    plt.figure(figsize=(5*cols, 5*rows))
-
-    for i, item in enumerate(items):
-        plt.subplot(rows, cols, i+1)
-        plt.imshow(item["image"], cmap="gray")
-        plt.axis("off")
-
-        p = item["page"]
-        x, y, w, h = item["bbox"]
-        new_e = item["new_entropy"]
-        plt.title(f"P{p} | ({x},{y}) | Entropy={new_e:.2f}", fontsize=9)
-
-    plt.suptitle(title, fontsize=16)
-    plt.tight_layout()
-    plt.show()
-
-show_high_entropy_images(high_entropy_images)
+                 title="Final Crops with Mild Background Reduction")
