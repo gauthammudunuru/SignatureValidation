@@ -103,7 +103,7 @@ def remove_background_for_filtering(pil_img):
 # ======================================================
 # 2b. Mild background reduction in original RGB
 # ======================================================
-def mild_background_reduction_white_bg(pil_img):
+def mild_background_reduction(pil_img):
     img_rgb = np.array(pil_img).astype(np.uint8)
     lab = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2LAB)
     l, a, b = cv2.split(lab)
