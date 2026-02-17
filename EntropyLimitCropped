@@ -1,17 +1,26 @@
-# =========================
-# 1. Read PDF → all pages
-# =========================
+# ======================================================
+# UPDATED VERSION (NO TRUE DUPLICATES)
+# - Keep page number
+# - Keep location (bbox)
+# - Remove duplicates ONLY if same page + same location
+# - Same sign on different pages or locations is KEPT
+# ======================================================
+
 from pdf2image import convert_from_path
 from PIL import Image
 import numpy as np
 import cv2
+import matplotlib.pyplot as plt
 
-# Load all pages as PIL images
+# ======================================================
+# 1. Read PDF pages
+# ======================================================
 pages = convert_from_path("document.pdf", dpi=300)
 
-# =========================
-# 2. Helper: entropy
-# =========================
+# ======================================================
+# 2. Helpers
+# ======================================================
+
 def calculate_entropy(pil_img):
     gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
     hist = np.histogram(gray.flatten(), bins=256)[0]
@@ -19,9 +28,6 @@ def calculate_entropy(pil_img):
     entropy = -np.sum(hist * np.log2(hist + 1e-8))
     return entropy
 
-# =========================
-# 3. Rectangle detection
-# =========================
 def detect_rectangles(pil_img, min_area=1000):
     img_np = np.array(pil_img)
     img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
@@ -51,53 +57,83 @@ def detect_rectangles(pil_img, min_area=1000):
 
     return rects
 
-# =========================
-# 4. Process ALL pages
-#    - rectangle filtering
-#    - entropy filtering (<2)
-# =========================
-cropped_images = []
+
+# duplicate check ONLY within same page + almost same location
+def is_duplicate_same_page(new_rect, existing_rects, tol=10):
+    x1, y1, w1, h1 = new_rect
+
+    for (x2, y2, w2, h2) in existing_rects:
+        if (
+            abs(x1 - x2) < tol and
+            abs(y1 - y2) < tol and
+            abs(w1 - w2) < tol and
+            abs(h1 - h2) < tol
+        ):
+            return True
+
+    return False
+
+
+# ======================================================
+# 3. Process all pages
+# ======================================================
 
 ENTROPY_THRESHOLD = 2.0
+
+# each element keeps metadata
+cropped_images = []
 
 for page_idx, page in enumerate(pages):
 
     rects = detect_rectangles(page)
 
-    for r_idx, (x, y, w, h) in enumerate(rects):
+    # remove duplicates only within THIS page
+    unique_rects = []
+    for r in rects:
+        if not is_duplicate_same_page(r, unique_rects):
+            unique_rects.append(r)
+
+    # crop + entropy filter
+    for (x, y, w, h) in unique_rects:
 
         crop = page.crop((x, y, x+w, y+h))
-
         entropy = calculate_entropy(crop)
 
         if entropy < ENTROPY_THRESHOLD:
-            cropped_images.append(crop)
+            cropped_images.append({
+                "page": page_idx + 1,
+                "bbox": (x, y, w, h),
+                "entropy": entropy,
+                "image": crop
+            })
 
-print(f"Total cropped images after entropy filtering: {len(cropped_images)}")
+print(f"Total cropped images after filtering: {len(cropped_images)}")
 
-# =========================
-# Show all cropped images
-# =========================
-import matplotlib.pyplot as plt
+# ======================================================
+# 4. Display all results
+# ======================================================
 
-def show_images_grid(images, cols=3, title="Cropped Images"):
-    if len(images) == 0:
+def show_images_grid(items, cols=3, title="Cropped Images"):
+    if len(items) == 0:
         print("No images to display.")
         return
 
-    rows = (len(images) + cols - 1) // cols
+    rows = (len(items) + cols - 1) // cols
     plt.figure(figsize=(5*cols, 5*rows))
 
-    for i, img in enumerate(images):
-        plt.subplot(rows, cols, i + 1)
-        plt.imshow(img)
+    for i, item in enumerate(items):
+        plt.subplot(rows, cols, i+1)
+        plt.imshow(item["image"])
         plt.axis("off")
-        plt.title(f"Image {i+1}")
+
+        p = item["page"]
+        x, y, w, h = item["bbox"]
+
+        plt.title(f"P{p} | ({x},{y})")
 
     plt.suptitle(title, fontsize=16)
     plt.tight_layout()
     plt.show()
 
-# Display all images
-show_images_grid(cropped_images, cols=3, title="Entropy-Filtered Cropped Images")
-
+show_images_grid(cropped_images, cols=3,
+                 title="Entropy-filtered crops (duplicates removed per page)")
