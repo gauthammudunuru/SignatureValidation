@@ -4,20 +4,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 
 # ==============================
-# 1️⃣ Connected components filter
-# ==============================
-def connected_components_filter(binary, min_area=120, visualize=False):
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
-    mask = np.zeros_like(binary)
-    for i in range(1, num_labels):
-        if stats[i, cv2.CC_STAT_AREA] > min_area:
-            mask[labels==i] = 255
-    if visualize:
-        plt.figure(); plt.imshow(mask, cmap='gray'); plt.title("After connected components"); plt.axis("off"); plt.show()
-    return mask
-
-# ==============================
-# 2️⃣ Forensic binary mask (no sharpening)
+# 1️⃣ Forensic binary mask (no sharpening)
 # ==============================
 def forensic_signature_mask(pil_img, visualize=False):
     gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
@@ -38,45 +25,76 @@ def forensic_signature_mask(pil_img, visualize=False):
     return binary
 
 # ==============================
-# 3️⃣ Mask original image with connected components
+# 2️⃣ Connected components filter
 # ==============================
-def mask_original_with_cc(original_img, visualize=False):
-    # Step 1: get binary forensic mask
+def connected_components_filter(binary, min_area=120, visualize=False):
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+    mask = np.zeros_like(binary)
+    for i in range(1, num_labels):
+        if stats[i, cv2.CC_STAT_AREA] > min_area:
+            mask[labels==i] = 255
+    if visualize:
+        plt.figure(); plt.imshow(mask, cmap='gray'); plt.title("After connected components"); plt.axis("off"); plt.show()
+    return mask
+
+# ==============================
+# 3️⃣ Mask original image & binarize
+# ==============================
+def mask_and_binarize_original(original_img, visualize=False):
+    # Step 1: forensic mask
     binary_mask = forensic_signature_mask(original_img)
     # Step 2: connected component filtering
     mask_cc = connected_components_filter(binary_mask)
 
-    # Convert mask to 3-channel for RGB multiplication
-    mask_rgb = cv2.merge([mask_cc]*3)
+    # Apply mask to original RGB image
     orig_np = np.array(original_img)
+    mask_3c = cv2.merge([mask_cc]*3)
+    masked_rgb = cv2.bitwise_and(orig_np, mask_3c)
 
-    # Apply mask: keep only non-zero pixels
-    result = cv2.bitwise_and(orig_np, mask_rgb)
+    # Convert to grayscale for binarization
+    gray = cv2.cvtColor(masked_rgb, cv2.COLOR_RGB2GRAY)
+    _, binarized = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY_INV)
 
-    # Convert back to PIL
-    result_pil = Image.fromarray(result)
+    # Convert back to RGB
+    binarized_rgb = cv2.cvtColor(binarized, cv2.COLOR_GRAY2RGB)
+    result_pil = Image.fromarray(binarized_rgb)
 
     if visualize:
-        plt.figure(); plt.imshow(result_pil); plt.title("Original image masked by CC"); plt.axis("off"); plt.show()
+        plt.figure(); plt.imshow(result_pil); plt.title("Masked + Binarized"); plt.axis("off"); plt.show()
 
     return result_pil
 
 # ==============================
-# 4️⃣ Run on final_crops
+# 4️⃣ Crop left-bottom quarter
+# ==============================
+def crop_left_bottom_quarter(pil_img, visualize=False):
+    w, h = pil_img.size
+    x1, y1 = 0, h//2
+    x2, y2 = w//2, h
+    cropped = pil_img.crop((x1, y1, x2, y2))
+
+    if visualize:
+        plt.figure(); plt.imshow(cropped); plt.title("Left-bottom quarter"); plt.axis("off"); plt.show()
+
+    return cropped
+
+# ==============================
+# 5️⃣ Run on final_crops
 # ==============================
 results = []
 
 for item in final_crops:
     if item["entropy"] < 2.0:
-        masked_img = mask_original_with_cc(item["image"], visualize=True)
+        processed_img = mask_and_binarize_original(item["image"], visualize=True)
+        left_bottom = crop_left_bottom_quarter(processed_img, visualize=True)
         results.append({
             "page": item["page"],
             "bbox": item["bbox"],
-            "signature_image": masked_img
+            "signature_image": left_bottom
         })
 
 # ==============================
-# 5️⃣ Display final signature images
+# 6️⃣ Display final signature images
 # ==============================
 def display_results(results):
     for r in results:
