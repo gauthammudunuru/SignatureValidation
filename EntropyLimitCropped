@@ -105,31 +105,33 @@ def remove_background_for_filtering(pil_img):
 # ======================================================
 def mild_background_reduction(pil_img):
     """
-    Mild background reduction in RGB space.
-    - Keeps printed text + handwritten signature black
-    - Spaces/background white
+    Convert a rectangle to black strokes (handwritten + printed) over white background.
+    - Keeps handwriting black
+    - Keeps printed text black
+    - Everything else (spaces + outer area) white
     """
-    img_rgb = np.array(pil_img).astype(np.uint8)
-    
-    # Convert to LAB to separate lightness channel
-    lab = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2LAB)
-    l, a, b = cv2.split(lab)
+    # Convert to grayscale
+    gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
 
-    # Estimate background with morphological opening
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35,35))
-    background = cv2.morphologyEx(l, cv2.MORPH_OPEN, kernel)
+    # Apply adaptive thresholding: black strokes, white background
+    # You can adjust blockSize and C for best results
+    thresh = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        25,   # blockSize: neighborhood for threshold
+        15    # C: constant to fine-tune
+    )
 
-    # Subtract background: dark strokes remain dark, background becomes white
-    l_reduced = cv2.subtract(l, background)
+    # Invert to make background white, strokes black
+    result = cv2.bitwise_not(thresh)
 
-    # Normalize to full range: 0=black (text), 255=white (background)
-    l_reduced = cv2.normalize(l_reduced, None, 0, 255, cv2.NORM_MINMAX)
+    # Convert back to RGB
+    result_rgb = cv2.cvtColor(result, cv2.COLOR_GRAY2RGB)
 
-    # Merge channels back
-    lab_reduced = cv2.merge([l_reduced, a, b])
-    img_reduced = cv2.cvtColor(lab_reduced, cv2.COLOR_LAB2RGB)
+    return Image.fromarray(result_rgb)
 
-    return Image.fromarray(img_reduced)
 
 
 # ======================================================
