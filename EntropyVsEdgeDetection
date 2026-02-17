@@ -1,0 +1,56 @@
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+
+# --------------------------------------------------
+# helpers
+# --------------------------------------------------
+
+def calculate_entropy(pil_img):
+    gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
+    hist = np.histogram(gray.flatten(), bins=256)[0]
+    hist = hist / hist.sum()
+    entropy = -np.sum(hist * np.log2(hist + 1e-8))
+    return entropy
+
+def edge_density(pil_img):
+    gray = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    return np.sum(edges) / (gray.shape[0] * gray.shape[1])
+
+# --------------------------------------------------
+# compute metrics
+# --------------------------------------------------
+
+entropy_vals = []
+edge_vals = []
+
+for item in cropped_images:
+    img = item["image"]
+
+    e = calculate_entropy(img)
+    d = edge_density(img)
+
+    item["entropy"] = e
+    item["edge_density"] = d
+
+    entropy_vals.append(e)
+    edge_vals.append(d)
+
+# --------------------------------------------------
+# scatter plot
+# --------------------------------------------------
+
+plt.figure(figsize=(8,6))
+plt.scatter(entropy_vals, edge_vals, alpha=0.7)
+
+plt.xlabel("Entropy")
+plt.ylabel("Edge Density")
+plt.title("Entropy vs Edge Density (Rectangle Crops)")
+plt.grid(True)
+
+# optional: annotate point numbers
+for i, (e, d) in enumerate(zip(entropy_vals, edge_vals)):
+    plt.text(e, d, str(i+1), fontsize=8)
+
+plt.show()
